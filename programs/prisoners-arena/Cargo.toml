@@ -1,0 +1,26 @@
+[package]
+name = "prisoners-arena"
+version = "0.1.0"
+description = "Iterated Prisoner's Dilemma tournament on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "prisoners_arena"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+testing = []
+
+[dependencies]
+anchor-lang = "0.32"
+solana-sha256-hasher = "2.3"
+match-logic = { path = "../../crates/match-logic" }

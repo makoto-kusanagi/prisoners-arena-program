@@ -1,0 +1,23 @@
+[features]
+seeds = false
+skip-lint = false
+testing = ["prisoners_arena/testing"]
+
+[programs.localnet]
+prisoners_arena = "32SU6RjkMa6F3tYrkWdU6jmBrG3a6UDCT6DZVAKNjbji"
+
+[programs.devnet]
+prisoners_arena = "32SU6RjkMa6F3tYrkWdU6jmBrG3a6UDCT6DZVAKNjbji"
+
+[programs.mainnet]
+prisoners_arena = "32SU6RjkMa6F3tYrkWdU6jmBrG3a6UDCT6DZVAKNjbji"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[workspace]
+members = ["programs/prisoners-arena"]
