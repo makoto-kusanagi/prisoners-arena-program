@@ -118,14 +118,12 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
 
     // Handle zero active players (all forfeited/refunded)
     if active_count == 0 {
-        // Tournament effectively cancelled — transition to Payout with empty winner set
-        tournament.state = TournamentState::Payout;
-        tournament.payout_started_at = clock.unix_timestamp;
-        tournament.winner_count = 0;
-        tournament.winner_pool = 0;
+        // Transition to Running with 0 matches so finalize_tournament can
+        // create the next tournament and sweep forfeited stakes to fees.
+        tournament.state = TournamentState::Running;
         tournament.matches_total = 0;
         tournament.matches_completed = 0;
-        msg!("Tournament {} cancelled: no active players after reveal", tournament.id);
+        msg!("Tournament {} has no active players after reveal, advancing to Running for finalization", tournament.id);
         return Ok(());
     }
 
@@ -166,6 +164,16 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
         tournament.pool -= refund_amount;
 
         msg!("Refunded last player {} to ensure even participant count", last_player);
+    }
+
+    // After odd-player refund, re-check if zero active players remain
+    let active_after_refund = tournament.participant_count - tournament.forfeits;
+    if active_after_refund == 0 {
+        tournament.state = TournamentState::Running;
+        tournament.matches_total = 0;
+        tournament.matches_completed = 0;
+        msg!("Tournament {} has no active players after odd-player refund, advancing to Running for finalization", tournament.id);
+        return Ok(());
     }
 
     // Generate randomness seed from slot hash (moved from close_registration)
@@ -501,61 +509,82 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         ArenaError::MatchesIncomplete
     );
 
-    // Sort scores descending to find threshold
-    let mut sorted_scores: Vec<u32> = tournament.scores.iter()
-        .enumerate()
-        .filter(|(i, _)| tournament.players[*i] != Pubkey::default())
-        .map(|(_, &s)| s)
-        .collect();
-    sorted_scores.sort_by(|a, b| b.cmp(a));
-
     // Active participants = participant_count - forfeits
     let active = tournament.participant_count - tournament.forfeits;
 
-    // Calculate winner count (top 25%, minimum 1)
-    let target_winners = std::cmp::max(1, (active + 3) / 4); // ceil(n/4)
-    
-    // Set min_winning_score (threshold to be a winner)
-    tournament.min_winning_score = sorted_scores
-        .get((target_winners - 1) as usize)
-        .copied()
-        .unwrap_or(0);
+    if active == 0 {
+        // No active players — all forfeited. Sweep remaining pool to fees.
+        tournament.winner_count = 0;
+        tournament.winner_pool = 0;
+        tournament.min_winning_score = 0;
 
-    // Count actual winners (all players at or above threshold)
-    tournament.winner_count = sorted_scores
-        .iter()
-        .filter(|&&s| s >= tournament.min_winning_score)
-        .count() as u32;
+        let rent = Rent::get()?;
+        let tournament_info = tournament.to_account_info();
+        let min_balance = rent.minimum_balance(tournament_info.data_len());
+        let transferable = tournament_info.lamports().saturating_sub(min_balance);
 
-    // Calculate house fee
-    let house_fee = tournament.pool
-        .checked_mul(tournament.house_fee_bps as u64)
-        .ok_or(ArenaError::Overflow)?
-        .checked_div(10000)
-        .ok_or(ArenaError::Overflow)?;
+        if transferable > 0 {
+            config.accumulated_fees += transferable;
+            **tournament.to_account_info().try_borrow_mut_lamports()? -= transferable;
+            **config.to_account_info().try_borrow_mut_lamports()? += transferable;
+        }
 
-    // Determine max distributable lamports (total - rent-exempt minimum)
-    let rent = Rent::get()?;
-    let tournament_info = tournament.to_account_info();
-    let min_balance = rent.minimum_balance(tournament_info.data_len());
-    let max_distributable = tournament_info.lamports()
-        .saturating_sub(min_balance);
-    
-    // Winner pool is the lesser of (pool - fees) and max distributable
-    let winner_pool_raw = (tournament.pool - house_fee).min(max_distributable);
-    let per_winner = winner_pool_raw / tournament.winner_count as u64;
-    let dust = winner_pool_raw - (per_winner * tournament.winner_count as u64);
+        tournament.payout_started_at = clock.unix_timestamp;
+        tournament.state = TournamentState::Payout;
+    } else {
+        // Sort scores descending to find threshold
+        let mut sorted_scores: Vec<u32> = tournament.scores.iter()
+            .enumerate()
+            .filter(|(i, _)| tournament.players[*i] != Pubkey::default())
+            .map(|(_, &s)| s)
+            .collect();
+        sorted_scores.sort_by(|a, b| b.cmp(a));
 
-    let fee_total = house_fee + dust;
-    config.accumulated_fees += fee_total;
+        // Calculate winner count (top 25%, minimum 1)
+        let target_winners = std::cmp::max(1, (active + 3) / 4); // ceil(n/4)
 
-    // Transfer fee lamports from tournament account to config account
-    **tournament.to_account_info().try_borrow_mut_lamports()? -= fee_total;
-    **config.to_account_info().try_borrow_mut_lamports()? += fee_total;
+        // Set min_winning_score (threshold to be a winner)
+        tournament.min_winning_score = sorted_scores
+            .get((target_winners - 1) as usize)
+            .copied()
+            .unwrap_or(0);
 
-    tournament.winner_pool = per_winner * tournament.winner_count as u64;
-    tournament.payout_started_at = clock.unix_timestamp;
-    tournament.state = TournamentState::Payout;
+        // Count actual winners (all players at or above threshold)
+        tournament.winner_count = sorted_scores
+            .iter()
+            .filter(|&&s| s >= tournament.min_winning_score)
+            .count() as u32;
+
+        // Calculate house fee
+        let house_fee = tournament.pool
+            .checked_mul(tournament.house_fee_bps as u64)
+            .ok_or(ArenaError::Overflow)?
+            .checked_div(10000)
+            .ok_or(ArenaError::Overflow)?;
+
+        // Determine max distributable lamports (total - rent-exempt minimum)
+        let rent = Rent::get()?;
+        let tournament_info = tournament.to_account_info();
+        let min_balance = rent.minimum_balance(tournament_info.data_len());
+        let max_distributable = tournament_info.lamports()
+            .saturating_sub(min_balance);
+
+        // Winner pool is the lesser of (pool - fees) and max distributable
+        let winner_pool_raw = (tournament.pool - house_fee).min(max_distributable);
+        let per_winner = winner_pool_raw / tournament.winner_count as u64;
+        let dust = winner_pool_raw - (per_winner * tournament.winner_count as u64);
+
+        let fee_total = house_fee + dust;
+        config.accumulated_fees += fee_total;
+
+        // Transfer fee lamports from tournament account to config account
+        **tournament.to_account_info().try_borrow_mut_lamports()? -= fee_total;
+        **config.to_account_info().try_borrow_mut_lamports()? += fee_total;
+
+        tournament.winner_pool = per_winner * tournament.winner_count as u64;
+        tournament.payout_started_at = clock.unix_timestamp;
+        tournament.state = TournamentState::Payout;
+    }
 
     // Create next tournament with snapshotted config values
     config.current_tournament_id += 1;
@@ -657,7 +686,7 @@ pub fn close_expired_entry(ctx: Context<CloseExpiredEntry>) -> Result<()> {
     );
 
     // If this was an unclaimed winner, add their share to accumulated fees
-    if !entry.paid_out && entry.score >= tournament.min_winning_score {
+    if !entry.paid_out && tournament.winner_count > 0 && entry.score >= tournament.min_winning_score {
         let unclaimed_share = tournament.winner_pool / tournament.winner_count as u64;
 
         let rent = Rent::get()?;
