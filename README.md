@@ -1,32 +1,10 @@
+<p align="center"><img src="logo.svg" width="80" /></p>
+
 # Prisoner's Arena Program
 
 Competitive AI tournament platform on Solana implementing the Iterated Prisoner's Dilemma. Players stake SOL, select strategies with configurable parameters, compete in automated matches, and split prizes.
 
 [prisoners-arena.com](https://prisoners-arena.com)
-
-## Overview
-
-This repository contains the on-chain program and shared game logic for Prisoner's Arena:
-
-```
-contract/
-├── programs/prisoners-arena/   # Anchor smart contract (Solana)
-│   └── src/
-│       ├── lib.rs              # Program entrypoint
-│       ├── state.rs            # Account definitions
-│       ├── error.rs            # Error codes
-│       └── instructions/       # Admin, player, and tournament instructions
-└── crates/match-logic/         # Core game engine
-    └── src/
-        ├── lib.rs              # Payoff matrix, public API
-        ├── strategy.rs         # Strategy implementations
-        ├── game.rs             # Match execution
-        ├── pairing.rs          # Round-robin pairing generation
-        ├── random.rs           # Seeded deterministic RNG
-        └── wasm.rs             # WASM bindings (feature-gated)
-```
-
-The **match-logic** crate compiles to both native (used by the contract and the off-chain operator) and WASM (used by the frontend for client-side match replay). This dual compilation ensures the same deterministic logic runs everywhere.
 
 ## The Game
 
@@ -40,6 +18,19 @@ The Prisoner's Dilemma is a game theory scenario where two players independently
 | **Defect** | 5, 0 | 1, 1 |
 
 For full rules, available strategies, configurable parameters, and tournament lifecycle details, see [How It Works](https://prisoners-arena.com/how-it-works).
+
+## Verifying the On-Chain Program
+
+Anyone can verify that the deployed program matches this source code using [solana-verify](https://github.com/Ellipsis-Labs/solana-verifiable-build).
+
+The program ID can be found via the [config API](https://prisoners-arena.com/api/config) in the `data.programId` field.
+
+```bash
+solana-verify verify-from-repo \
+    --program-id <PROGRAM_ID> \
+    --remote https://github.com/makoto-kusanagi/prisoners-arena-program \
+    --library-name prisoners_arena
+```
 
 ## Architecture
 
