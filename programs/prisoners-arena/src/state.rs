@@ -211,6 +211,24 @@ pub enum Strategy {
     Gradual,
 }
 
+impl Strategy {
+    /// Map a u8 index (0–8) to the corresponding Strategy variant.
+    pub fn from_index(index: u8) -> Option<Strategy> {
+        match index {
+            0 => Some(Strategy::TitForTat),
+            1 => Some(Strategy::AlwaysDefect),
+            2 => Some(Strategy::AlwaysCooperate),
+            3 => Some(Strategy::GrimTrigger),
+            4 => Some(Strategy::Pavlov),
+            5 => Some(Strategy::SuspiciousTitForTat),
+            6 => Some(Strategy::Random),
+            7 => Some(Strategy::TitForTwoTats),
+            8 => Some(Strategy::Gradual),
+            _ => None,
+        }
+    }
+}
+
 /// Strategy parameters for fine-tuning behavior
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StrategyParams {

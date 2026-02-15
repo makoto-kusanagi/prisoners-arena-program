@@ -228,7 +228,6 @@ pub struct ForfeitUnrevealed<'info> {
     #[account(
         mut,
         has_one = tournament,
-        close = operator,  // rent → operator
     )]
     pub entry: Account<'info, Entry>,
 
@@ -241,7 +240,7 @@ pub struct ForfeitUnrevealed<'info> {
 
 pub fn forfeit_unrevealed(ctx: Context<ForfeitUnrevealed>) -> Result<()> {
     let tournament = &mut ctx.accounts.tournament;
-    let entry = &ctx.accounts.entry;
+    let entry = &mut ctx.accounts.entry;
     let clock = Clock::get()?;
 
     require!(
@@ -256,17 +255,26 @@ pub fn forfeit_unrevealed(ctx: Context<ForfeitUnrevealed>) -> Result<()> {
 
     require!(!entry.revealed, ArenaError::AlreadyRevealed);
 
-    // Mark player slot as forfeited
-    let idx = entry.index as usize;
-    tournament.strategies[idx] = u8::MAX;  // sentinel stays
-    tournament.players[idx] = Pubkey::default();
+    // Derive a deterministic strategy from the commitment hash
+    let strategy_index = entry.commitment[0] % 9;
+    let strategy = crate::state::Strategy::from_index(strategy_index)
+        .ok_or(ArenaError::InvalidState)?;
+    let params = crate::state::StrategyParams::default();
 
-    // Track forfeiture (stake stays in pool — benefits remaining players)
-    tournament.forfeits += 1;
-    tournament.entries_remaining -= 1;
+    // Assign strategy to entry
+    entry.strategy = strategy;
+    entry.strategy_params = params;
+    entry.revealed = true;
+
+    // Update tournament vecs
+    let idx = entry.index as usize;
+    tournament.strategies[idx] = strategy as u8;
+    tournament.strategy_params[idx] = params;
+    tournament.reveals_completed += 1;
 
     msg!(
-        "Forfeited unrevealed entry {} (player {}) in tournament {}",
+        "Assigned random strategy {} to unrevealed entry {} (player {}) in tournament {}",
+        strategy_index,
         idx,
         entry.player,
         tournament.id,
