@@ -22,5 +22,5 @@ testing = []
 
 [dependencies]
 anchor-lang = "0.32"
-solana-sha256-hasher = "2.3"
+solana-sha256-hasher = "3.1"
 match-logic = { path = "../../crates/match-logic" }

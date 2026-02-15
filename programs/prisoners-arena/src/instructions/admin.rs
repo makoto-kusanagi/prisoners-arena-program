@@ -4,6 +4,30 @@ use anchor_lang::prelude::*;
 use crate::state::{Config, Tournament, TournamentState};
 use crate::error::ArenaError;
 
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct InitializeConfigParams {
+    pub operator: Pubkey,
+    pub stake: u64,
+    pub min_participants: u16,
+    pub max_participants: u16,
+    pub registration_duration: i64,
+    pub matches_per_player: u16,
+    pub reveal_duration: i64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct UpdateConfigParams {
+    pub operator: Option<Pubkey>,
+    pub house_fee_bps: Option<u16>,
+    pub stake: Option<u64>,
+    pub min_participants: Option<u16>,
+    pub max_participants: Option<u16>,
+    pub registration_duration: Option<i64>,
+    pub matches_per_player: Option<u16>,
+    pub reveal_duration: Option<i64>,
+    pub operator_tx_fee: Option<u64>,
+}
+
 /// Initialize global config and Tournament #0
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
@@ -32,16 +56,21 @@ pub struct InitializeConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 pub fn initialize_config(
     ctx: Context<InitializeConfig>,
-    operator: Pubkey,
-    stake: u64,
-    min_participants: u16,
-    max_participants: u16,
-    registration_duration: i64,
-    matches_per_player: u16,
-    reveal_duration: i64,
+    params: InitializeConfigParams,
 ) -> Result<()> {
+    let InitializeConfigParams {
+        operator,
+        stake,
+        min_participants,
+        max_participants,
+        registration_duration,
+        matches_per_player,
+        reveal_duration,
+    } = params;
+
     // Validate min_participants is even and >= 2
     require!(
         min_participants >= 2 && min_participants % 2 == 0,
@@ -62,6 +91,7 @@ pub fn initialize_config(
     config.current_tournament_id = 0;
     config.reveal_duration = reveal_duration;
     config.bump = ctx.bumps.config;
+    config.operator_tx_fee = 0;
 
     // Initialize Tournament #0
     let tournament = &mut ctx.accounts.tournament;
@@ -95,6 +125,7 @@ pub fn initialize_config(
     tournament.strategies = Vec::new();
     tournament.strategy_params = Vec::new();
     tournament.bump = ctx.bumps.tournament;
+    tournament.operator_costs = 0;
 
     msg!("Config initialized by {}, operator = {}", config.admin, config.operator);
     msg!("Tournament #0 created, registration ends at {}", tournament.registration_ends);
@@ -116,17 +147,23 @@ pub struct UpdateConfig<'info> {
     pub admin: Signer<'info>,
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 pub fn update_config(
     ctx: Context<UpdateConfig>,
-    operator: Option<Pubkey>,
-    house_fee_bps: Option<u16>,
-    stake: Option<u64>,
-    min_participants: Option<u16>,
-    max_participants: Option<u16>,
-    registration_duration: Option<i64>,
-    matches_per_player: Option<u16>,
-    reveal_duration: Option<i64>,
+    params: UpdateConfigParams,
 ) -> Result<()> {
+    let UpdateConfigParams {
+        operator,
+        house_fee_bps,
+        stake,
+        min_participants,
+        max_participants,
+        registration_duration,
+        matches_per_player,
+        reveal_duration,
+        operator_tx_fee,
+    } = params;
+
     let config = &mut ctx.accounts.config;
 
     if let Some(op) = operator {
@@ -169,6 +206,10 @@ pub fn update_config(
     if let Some(duration) = reveal_duration {
         require!(duration > 0, ArenaError::Overflow);
         config.reveal_duration = duration;
+    }
+
+    if let Some(fee) = operator_tx_fee {
+        config.operator_tx_fee = fee;
     }
 
     msg!("Config updated");

@@ -47,6 +47,11 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
         ArenaError::MinParticipantsNotReached
     );
 
+    // Track operator costs for reimbursement
+    tournament.operator_costs = tournament.operator_costs
+        .checked_add(config.operator_tx_fee)
+        .ok_or(ArenaError::Overflow)?;
+
     // Transition to Reveal phase (NOT Running — that happens after close_reveal)
     tournament.state = TournamentState::Reveal;
     tournament.reveal_ends = clock.unix_timestamp + tournament.reveal_duration;
@@ -96,6 +101,7 @@ pub struct CloseReveal<'info> {
 }
 
 pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
+    let config = &ctx.accounts.config;
     let tournament = &mut ctx.accounts.tournament;
     let clock = Clock::get()?;
 
@@ -108,6 +114,11 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
         clock.unix_timestamp > tournament.reveal_ends,
         ArenaError::RevealPeriodNotEnded
     );
+
+    // Track operator costs for reimbursement
+    tournament.operator_costs = tournament.operator_costs
+        .checked_add(config.operator_tx_fee)
+        .ok_or(ArenaError::Overflow)?;
 
     // Verify all non-forfeited players have revealed
     let active_count = tournament.participant_count - tournament.forfeits;
@@ -239,6 +250,7 @@ pub struct ForfeitUnrevealed<'info> {
 }
 
 pub fn forfeit_unrevealed(ctx: Context<ForfeitUnrevealed>) -> Result<()> {
+    let config = &ctx.accounts.config;
     let tournament = &mut ctx.accounts.tournament;
     let entry = &mut ctx.accounts.entry;
     let clock = Clock::get()?;
@@ -252,6 +264,11 @@ pub fn forfeit_unrevealed(ctx: Context<ForfeitUnrevealed>) -> Result<()> {
         clock.unix_timestamp > tournament.reveal_ends,
         ArenaError::RevealPeriodNotEnded
     );
+
+    // Track operator costs for reimbursement
+    tournament.operator_costs = tournament.operator_costs
+        .checked_add(config.operator_tx_fee)
+        .ok_or(ArenaError::Overflow)?;
 
     require!(!entry.revealed, ArenaError::AlreadyRevealed);
 
@@ -307,12 +324,18 @@ pub struct RunMatches<'info> {
 pub fn run_matches<'info>(
     ctx: Context<'_, '_, '_, 'info, RunMatches<'info>>,
 ) -> Result<()> {
+    let config = &ctx.accounts.config;
     let tournament = &mut ctx.accounts.tournament;
 
     require!(
         tournament.state == TournamentState::Running,
         ArenaError::InvalidState
     );
+
+    // Track operator costs for reimbursement
+    tournament.operator_costs = tournament.operator_costs
+        .checked_add(config.operator_tx_fee)
+        .ok_or(ArenaError::Overflow)?;
 
     // Safety check: verify all active strategies are revealed (belt-and-suspenders)
     for i in 0..tournament.players.len() {
@@ -517,11 +540,29 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         ArenaError::MatchesIncomplete
     );
 
+    // Track operator costs for this tx
+    tournament.operator_costs = tournament.operator_costs
+        .checked_add(config.operator_tx_fee)
+        .ok_or(ArenaError::Overflow)?;
+
+    // Pre-calculate costs for post-finalization txs:
+    // close_entry × entries_remaining + close_tournament × 1
+    let post_finalization_txs = (tournament.entries_remaining as u64)
+        .checked_add(1)
+        .ok_or(ArenaError::Overflow)?;
+    tournament.operator_costs = tournament.operator_costs
+        .checked_add(
+            post_finalization_txs
+                .checked_mul(config.operator_tx_fee)
+                .ok_or(ArenaError::Overflow)?
+        )
+        .ok_or(ArenaError::Overflow)?;
+
     // Active participants = participant_count - forfeits
     let active = tournament.participant_count - tournament.forfeits;
 
     if active == 0 {
-        // No active players — all forfeited. Sweep remaining pool to fees.
+        // No active players — all forfeited. Reimburse operator first, sweep remainder.
         tournament.winner_count = 0;
         tournament.winner_pool = 0;
         tournament.min_winning_score = 0;
@@ -531,10 +572,19 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         let min_balance = rent.minimum_balance(tournament_info.data_len());
         let transferable = tournament_info.lamports().saturating_sub(min_balance);
 
-        if transferable > 0 {
-            config.accumulated_fees += transferable;
-            **tournament.to_account_info().try_borrow_mut_lamports()? -= transferable;
-            **config.to_account_info().try_borrow_mut_lamports()? += transferable;
+        // Reimburse operator from pool
+        let operator_reimbursement = tournament.operator_costs.min(transferable);
+        if operator_reimbursement > 0 {
+            **tournament.to_account_info().try_borrow_mut_lamports()? -= operator_reimbursement;
+            **ctx.accounts.operator.try_borrow_mut_lamports()? += operator_reimbursement;
+        }
+
+        // Sweep remainder to accumulated fees
+        let remaining = tournament.to_account_info().lamports().saturating_sub(min_balance);
+        if remaining > 0 {
+            config.accumulated_fees += remaining;
+            **tournament.to_account_info().try_borrow_mut_lamports()? -= remaining;
+            **config.to_account_info().try_borrow_mut_lamports()? += remaining;
         }
 
         tournament.payout_started_at = clock.unix_timestamp;
@@ -549,7 +599,7 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         sorted_scores.sort_by(|a, b| b.cmp(a));
 
         // Calculate winner count (top 25%, minimum 1)
-        let target_winners = std::cmp::max(1, (active + 3) / 4); // ceil(n/4)
+        let target_winners = std::cmp::max(1, active.div_ceil(4)); // ceil(n/4)
 
         // Set min_winning_score (threshold to be a winner)
         tournament.min_winning_score = sorted_scores
@@ -563,7 +613,8 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
             .filter(|&&s| s >= tournament.min_winning_score)
             .count() as u32;
 
-        // Calculate house fee
+        // Calculate house fee and operator reimbursement
+        let operator_reimbursement = tournament.operator_costs;
         let house_fee = tournament.pool
             .checked_mul(tournament.house_fee_bps as u64)
             .ok_or(ArenaError::Overflow)?
@@ -577,8 +628,11 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         let max_distributable = tournament_info.lamports()
             .saturating_sub(min_balance);
 
-        // Winner pool is the lesser of (pool - fees) and max distributable
-        let winner_pool_raw = (tournament.pool - house_fee).min(max_distributable);
+        // Winner pool = pool minus house fee and operator reimbursement
+        let pool_after_deductions = tournament.pool
+            .saturating_sub(house_fee)
+            .saturating_sub(operator_reimbursement);
+        let winner_pool_raw = pool_after_deductions.min(max_distributable);
         let per_winner = winner_pool_raw / tournament.winner_count as u64;
         let dust = winner_pool_raw - (per_winner * tournament.winner_count as u64);
 
@@ -588,6 +642,16 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         // Transfer fee lamports from tournament account to config account
         **tournament.to_account_info().try_borrow_mut_lamports()? -= fee_total;
         **config.to_account_info().try_borrow_mut_lamports()? += fee_total;
+
+        // Transfer operator reimbursement from tournament to operator
+        if operator_reimbursement > 0 {
+            let max_operator = tournament.to_account_info().lamports().saturating_sub(min_balance);
+            let actual_reimbursement = operator_reimbursement.min(max_operator);
+            if actual_reimbursement > 0 {
+                **tournament.to_account_info().try_borrow_mut_lamports()? -= actual_reimbursement;
+                **ctx.accounts.operator.try_borrow_mut_lamports()? += actual_reimbursement;
+            }
+        }
 
         tournament.winner_pool = per_winner * tournament.winner_count as u64;
         tournament.payout_started_at = clock.unix_timestamp;
@@ -625,6 +689,7 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
     next_tournament.strategies = Vec::new();
     next_tournament.strategy_params = Vec::new();
     next_tournament.bump = ctx.bumps.next_tournament;
+    next_tournament.operator_costs = 0;
 
     msg!(
         "Tournament {} finalized. {} winners (min score: {}) will split {} lamports",
@@ -642,9 +707,9 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
     Ok(())
 }
 
-/// Close expired entry and recover unclaimed funds
+/// Close entry: distribute payout to winners, return rent to player
 #[derive(Accounts)]
-pub struct CloseExpiredEntry<'info> {
+pub struct CloseEntry<'info> {
     #[account(
         mut,
         seeds = [b"config"],
@@ -665,61 +730,70 @@ pub struct CloseExpiredEntry<'info> {
         seeds = [b"entry", tournament.key().as_ref(), entry.player.as_ref()],
         bump = entry.bump,
         has_one = tournament,
-        close = operator
+        close = player
     )]
     pub entry: Account<'info, Entry>,
+
+    /// CHECK: Validated via entry.player constraint
+    #[account(
+        mut,
+        constraint = player.key() == entry.player @ ArenaError::InvalidEntryAccount
+    )]
+    pub player: AccountInfo<'info>,
 
     #[account(mut)]
     pub operator: Signer<'info>,
 }
 
-pub fn close_expired_entry(ctx: Context<CloseExpiredEntry>) -> Result<()> {
+pub fn close_entry(ctx: Context<CloseEntry>) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let tournament = &mut ctx.accounts.tournament;
     let entry = &ctx.accounts.entry;
-    let clock = Clock::get()?;
 
-    // Must be in Payout state
     require!(
         tournament.state == TournamentState::Payout,
         ArenaError::InvalidState
     );
 
-    // Allow early closure when all winners have claimed, or after 30-day expiry
-    let time_expired = clock.unix_timestamp >= tournament.payout_started_at + CLAIM_EXPIRY_SECONDS;
-    let all_winners_claimed = tournament.claims_processed >= tournament.winner_count;
-    require!(
-        time_expired || all_winners_claimed,
-        ArenaError::NotExpired
-    );
+    // If this is a winner who hasn't been paid
+    if !entry.paid_out
+        && tournament.winner_count > 0
+        && entry.score >= tournament.min_winning_score
+    {
+        let clock = Clock::get()?;
+        let expired = clock.unix_timestamp >= tournament.payout_started_at + CLAIM_EXPIRY_SECONDS;
 
-    // If this was an unclaimed winner, add their share to accumulated fees
-    if !entry.paid_out && tournament.winner_count > 0 && entry.score >= tournament.min_winning_score {
-        let unclaimed_share = tournament.winner_pool / tournament.winner_count as u64;
-
-        let rent = Rent::get()?;
-        let min_balance = rent.minimum_balance(tournament.to_account_info().data_len());
-        let max_transfer = tournament.to_account_info().lamports()
-            .saturating_sub(min_balance);
-        let transfer_amount = unclaimed_share.min(max_transfer);
-
-        if transfer_amount > 0 {
-            config.accumulated_fees += transfer_amount;
-            **tournament.to_account_info().try_borrow_mut_lamports()? -= transfer_amount;
-            **config.to_account_info().try_borrow_mut_lamports()? += transfer_amount;
+        if expired {
+            // After 30 days: unclaimed prize → accumulated_fees
+            let share = tournament.winner_pool / tournament.winner_count as u64;
+            let rent = Rent::get()?;
+            let min_balance = rent.minimum_balance(tournament.to_account_info().data_len());
+            let max_transfer = tournament.to_account_info().lamports().saturating_sub(min_balance);
+            let transfer = share.min(max_transfer);
+            if transfer > 0 {
+                config.accumulated_fees += transfer;
+                **tournament.to_account_info().try_borrow_mut_lamports()? -= transfer;
+                **config.to_account_info().try_borrow_mut_lamports()? += transfer;
+            }
+        } else {
+            // Within 30 days: payout → player
+            let payout = tournament.winner_pool / tournament.winner_count as u64;
+            let rent = Rent::get()?;
+            let min_balance = rent.minimum_balance(tournament.to_account_info().data_len());
+            let max_transfer = tournament.to_account_info().lamports().saturating_sub(min_balance);
+            let transfer = payout.min(max_transfer);
+            if transfer > 0 {
+                **tournament.to_account_info().try_borrow_mut_lamports()? -= transfer;
+                **ctx.accounts.player.try_borrow_mut_lamports()? += transfer;
+            }
+            tournament.claims_processed += 1;
         }
-
-        msg!(
-            "Added unclaimed prize {} lamports to accumulated fees (of {} owed)",
-            transfer_amount,
-            unclaimed_share
-        );
     }
 
-    // Decrement entries_remaining counter
+    // Entry closed via `close = player` — rent returned to player
     tournament.entries_remaining -= 1;
 
-    msg!("Closed expired entry for player {}", entry.player);
+    msg!("Closed entry for player {}", entry.player);
 
     Ok(())
 }

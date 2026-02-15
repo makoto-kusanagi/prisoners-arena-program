@@ -14,7 +14,7 @@ pub fn effective_k(participant_count: u32, config_k: u16) -> u16 {
     if participant_count <= 200 {
         (participant_count - 1) as u16
     } else {
-        config_k.min(99).max(49)
+        config_k.clamp(49, 99)
     }
 }
 
@@ -63,7 +63,7 @@ pub fn generate_all_pairings(
     
     // We need k/2 offsets for k matches per player
     // Each offset gives 2 matches per player (they appear twice in offset's pairs)
-    let offsets_needed = (k + 1) / 2; // Round up
+    let offsets_needed = k.div_ceil(2);
     let offsets_to_use = offsets_needed.min(available_offsets.len());
     
     let selected_offsets = &available_offsets[..offsets_to_use];
@@ -111,7 +111,7 @@ fn generate_repeated_round_robin(n: usize, k: usize, seed: &[u8; 32]) -> Vec<(u3
     // Each round-robin gives n-1 matches per player
     // Need ceil(k / (n-1)) cycles (n >= 2 guaranteed by caller)
     let matches_per_cycle = n - 1;
-    let cycles = (k + matches_per_cycle - 1) / matches_per_cycle;
+    let cycles = k.div_ceil(matches_per_cycle);
     
     let mut pairings = Vec::with_capacity(base_pairs.len() * cycles);
     for _ in 0..cycles {

@@ -53,6 +53,8 @@ pub struct Config {
     pub reveal_duration: i64,
     /// PDA bump seed
     pub bump: u8,
+    /// Per-tx reimbursement amount for operator (lamports, 0 = off)
+    pub operator_tx_fee: u64,
 }
 
 impl Config {
@@ -69,7 +71,8 @@ impl Config {
         4 +   // current_tournament_id
         8 +   // reveal_duration (NEW v1.7)
         1 +   // bump
-        24;   // padding for future fields (was 32, used 8 for reveal_duration)
+        8 +   // operator_tx_fee (NEW v1.8)
+        16;   // padding for future fields (was 24, used 8 for operator_tx_fee)
 }
 
 /// Tournament state machine
@@ -147,6 +150,8 @@ pub struct Tournament {
     pub strategy_params: Vec<StrategyParams>,
     /// PDA bump seed
     pub bump: u8,
+    /// Accumulated operator costs for reimbursement at finalization
+    pub operator_costs: u64,
 }
 
 /// Bytes added per player (32-byte pubkey + 4-byte score + 1-byte strategy + 5-byte params)
@@ -183,7 +188,8 @@ impl Tournament {
         4 +   // strategies vec len (empty)
         4 +   // strategy_params vec len (empty)
         1 +   // bump
-        8;    // padding (was 32, used 24 for new fields)
+        8 +   // operator_costs (NEW v1.8)
+        32;   // padding (was 8, expanded for future fields)
 
     /// Calculate space needed for a tournament with given number of participants
     pub fn space(participant_count: u16) -> usize {

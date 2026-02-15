@@ -22,49 +22,17 @@ pub mod prisoners_arena {
     /// Initialize the global config and Tournament #0 (one-time setup)
     pub fn initialize_config(
         ctx: Context<InitializeConfig>,
-        operator: Pubkey,
-        stake: u64,
-        min_participants: u16,
-        max_participants: u16,
-        registration_duration: i64,
-        matches_per_player: u16,
-        reveal_duration: i64,
+        params: InitializeConfigParams,
     ) -> Result<()> {
-        instructions::admin::initialize_config(
-            ctx,
-            operator,
-            stake,
-            min_participants,
-            max_participants,
-            registration_duration,
-            matches_per_player,
-            reveal_duration,
-        )
+        instructions::admin::initialize_config(ctx, params)
     }
 
     /// Update config parameters (admin only)
     pub fn update_config(
         ctx: Context<UpdateConfig>,
-        operator: Option<Pubkey>,
-        house_fee_bps: Option<u16>,
-        stake: Option<u64>,
-        min_participants: Option<u16>,
-        max_participants: Option<u16>,
-        registration_duration: Option<i64>,
-        matches_per_player: Option<u16>,
-        reveal_duration: Option<i64>,
+        params: UpdateConfigParams,
     ) -> Result<()> {
-        instructions::admin::update_config(
-            ctx,
-            operator,
-            house_fee_bps,
-            stake,
-            min_participants,
-            max_participants,
-            registration_duration,
-            matches_per_player,
-            reveal_duration,
-        )
+        instructions::admin::update_config(ctx, params)
     }
 
     /// Withdraw accumulated house fees (admin only)
@@ -125,9 +93,9 @@ pub mod prisoners_arena {
         instructions::tournament::finalize_tournament(ctx)
     }
 
-    /// Close expired entry after 30-day claim window
-    pub fn close_expired_entry(ctx: Context<CloseExpiredEntry>) -> Result<()> {
-        instructions::tournament::close_expired_entry(ctx)
+    /// Close entry: distribute payout to winners, return rent to player
+    pub fn close_entry(ctx: Context<CloseEntry>) -> Result<()> {
+        instructions::tournament::close_entry(ctx)
     }
 
     /// Close tournament account and recover rent (30 days after payout)
