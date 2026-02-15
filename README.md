@@ -27,8 +27,8 @@ The program ID can be found via the [config API](https://prisoners-arena.com/api
 
 ```bash
 solana-verify verify-from-repo \
+    https://github.com/makoto-kusanagi/prisoners-arena-program \
     --program-id <PROGRAM_ID> \
-    --remote https://github.com/makoto-kusanagi/prisoners-arena-program \
     --library-name prisoners_arena
 ```
 
