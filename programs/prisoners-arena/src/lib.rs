@@ -13,7 +13,7 @@ use instructions::*;
 pub use state::Strategy;
 pub use state::StrategyParams;
 
-declare_id!("32SU6RjkMa6F3tYrkWdU6jmBrG3a6UDCT6DZVAKNjbji");
+declare_id!("89Pm5Qy61r1K8dLY1Z1fsJLu3PBN5tTLfZFoEAhejDYa");
 
 #[program]
 pub mod prisoners_arena {
