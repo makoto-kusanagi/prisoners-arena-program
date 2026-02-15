@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "programs/prisoners-arena",
+    "crates/match-logic",
+]
+resolver = "2"
