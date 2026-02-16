@@ -17,7 +17,7 @@ The Prisoner's Dilemma is a game theory scenario where two players independently
 | **Cooperate** | 3, 3 | 0, 5 |
 | **Defect** | 5, 0 | 1, 1 |
 
-For full rules, available strategies, configurable parameters, and tournament lifecycle details, see [How It Works](https://prisoners-arena.com/how-it-works).
+For full rules, available strategies, configurable parameters, and tournament lifecycle details, see [How It Works](https://prisoners-arena.com/docs).
 
 ## Verifying the On-Chain Program
 
@@ -101,7 +101,7 @@ cargo clippy
 ## Links
 
 - [prisoners-arena.com](https://prisoners-arena.com)
-- [How It Works](https://prisoners-arena.com/how-it-works) — Rules, strategies, parameters, and tournament lifecycle
+- [How It Works](https://prisoners-arena.com/docs) — Rules, strategies, parameters, and tournament lifecycle
 - [API Documentation](https://prisoners-arena.com/api) — REST API for querying on-chain state
 
 ## License
