@@ -19,7 +19,7 @@ declare_id!("89Pm5Qy61r1K8dLY1Z1fsJLu3PBN5tTLfZFoEAhejDYa");
 solana_security_txt::security_txt! {
     name: "Prisoner's Arena",
     project_url: "https://github.com/makoto-kusanagi/prisoners-arena-program",
-    contacts: "link:https://github.com/makoto-kusanagi/prisoners-arena-program/issues",
+    contacts: "link:https://github.com/makoto-kusanagi/prisoners-arena-program/security/advisories/new",
     policy: "https://github.com/makoto-kusanagi/prisoners-arena-program/blob/main/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/makoto-kusanagi/prisoners-arena-program"
