@@ -106,4 +106,4 @@ cargo clippy
 
 ## License
 
-Copyright 2025 Prisoner's Arena contributors. Source code is publicly available for verification and auditing purposes. Not licensed for commercial use, redistribution, or derivative works.
+Copyright (c) 2026 Prisoners Arena Contributors. Licensed under the [PolyForm Noncommercial 1.0.0](LICENSE).

@@ -3,6 +3,7 @@ name = "prisoners-arena"
 version = "0.1.0"
 description = "Iterated Prisoner's Dilemma tournament on Solana"
 edition = "2021"
+license-file = "../../LICENSE"
 
 [lib]
 crate-type = ["cdylib", "lib"]

@@ -3,6 +3,7 @@ name = "match-logic"
 version = "0.1.0"
 edition = "2021"
 description = "Core game logic for Prisoner's Arena - Iterated Prisoner's Dilemma"
+license-file = "../../LICENSE"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
