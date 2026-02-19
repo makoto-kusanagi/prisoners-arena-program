@@ -169,7 +169,6 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
 
         tournament.players[last_index] = Pubkey::default();
         tournament.strategies[last_index] = u8::MAX;
-        tournament.strategy_params[last_index] = crate::state::StrategyParams::default();
         tournament.participant_count -= 1;
         tournament.reveals_completed -= 1;
         tournament.pool -= refund_amount;
@@ -276,17 +275,14 @@ pub fn forfeit_unrevealed(ctx: Context<ForfeitUnrevealed>) -> Result<()> {
     let strategy_index = entry.commitment[0] % 9;
     let strategy = crate::state::Strategy::from_index(strategy_index)
         .ok_or(ArenaError::InvalidState)?;
-    let params = crate::state::StrategyParams::default();
 
     // Assign strategy to entry
     entry.strategy = strategy;
-    entry.strategy_params = params;
     entry.revealed = true;
 
     // Update tournament vecs
     let idx = entry.index as usize;
     tournament.strategies[idx] = strategy as u8;
-    tournament.strategy_params[idx] = params;
     tournament.reveals_completed += 1;
 
     msg!(
@@ -405,8 +401,18 @@ pub fn run_matches<'info>(
         require!(entry_b_account.index == idx_b, ArenaError::InvalidEntryAccount);
 
         // Run the match using match-logic crate
-        let strategy_a = crate::state::to_match_strategy(entry_a_account.strategy, &entry_a_account.strategy_params);
-        let strategy_b = crate::state::to_match_strategy(entry_b_account.strategy, &entry_b_account.strategy_params);
+        let bytecode_a: Option<&[u8]> = if entry_a_account.strategy == crate::state::Strategy::Custom {
+            Some(&entry_a_account.bytecode[..entry_a_account.bytecode_len as usize])
+        } else {
+            None
+        };
+        let bytecode_b: Option<&[u8]> = if entry_b_account.strategy == crate::state::Strategy::Custom {
+            Some(&entry_b_account.bytecode[..entry_b_account.bytecode_len as usize])
+        } else {
+            None
+        };
+        let strategy_a = crate::state::to_player_strategy(entry_a_account.strategy, bytecode_a);
+        let strategy_b = crate::state::to_player_strategy(entry_b_account.strategy, bytecode_b);
 
         let result = match_logic::run_match(
             &strategy_a,
@@ -687,7 +693,6 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
     next_tournament.players = Vec::new();
     next_tournament.scores = Vec::new();
     next_tournament.strategies = Vec::new();
-    next_tournament.strategy_params = Vec::new();
     next_tournament.bump = ctx.bumps.next_tournament;
     next_tournament.operator_costs = 0;
 

@@ -2,8 +2,9 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use crate::state::{Config, Tournament, Entry, Strategy, StrategyParams, TournamentState, CLAIM_EXPIRY_SECONDS, BYTES_PER_PLAYER};
+use crate::state::{Config, Tournament, Entry, Strategy, TournamentState, CLAIM_EXPIRY_SECONDS, BYTES_PER_PLAYER};
 use crate::error::ArenaError;
+use match_logic::MAX_BYTECODE_LEN;
 
 /// Enter the current tournament with a commitment hash
 #[derive(Accounts)]
@@ -83,19 +84,19 @@ pub fn enter_tournament(
     entry.index = tournament.players.len() as u32;
     entry.commitment = commitment;
     entry.strategy = Strategy::default();           // zeroed until reveal
-    entry.strategy_params = StrategyParams::default(); // zeroed until reveal
     entry.revealed = false;
     entry.score = 0;
     entry.matches_played = 0;
     entry.paid_out = false;
     entry.created_at = clock.unix_timestamp;
     entry.bump = ctx.bumps.entry;
+    entry.bytecode_len = 0;
+    entry.bytecode = [0u8; 64];
 
     // Add player to tournament's players vec (strategy sentinel until reveal)
     tournament.players.push(player.key());
     tournament.scores.push(0);
     tournament.strategies.push(u8::MAX);                  // sentinel: unrevealed
-    tournament.strategy_params.push(StrategyParams::default());
     tournament.participant_count += 1;
     tournament.entries_remaining += 1;
     tournament.pool += stake;
@@ -130,8 +131,8 @@ pub struct RevealStrategy<'info> {
 pub fn reveal_strategy(
     ctx: Context<RevealStrategy>,
     strategy: Strategy,
-    params: StrategyParams,
     salt: [u8; 16],
+    bytecode: Option<Vec<u8>>,
 ) -> Result<()> {
     let tournament = &mut ctx.accounts.tournament;
     let entry = &mut ctx.accounts.entry;
@@ -153,37 +154,48 @@ pub fn reveal_strategy(
     // Not already revealed
     require!(!entry.revealed, ArenaError::AlreadyRevealed);
 
-    // Validate params (same as v1.4 validation)
-    require!(params.forgiveness <= 100, ArenaError::InvalidParams);
-    require!(params.retaliation_delay <= 10, ArenaError::InvalidParams);
-    require!(params.noise_tolerance <= 5, ArenaError::InvalidParams);
-    require!(params.cooperate_bias <= 100, ArenaError::InvalidParams);
+    if strategy == Strategy::Custom {
+        // Custom strategy: bytecode is required and must be valid
+        let code = bytecode.as_ref().ok_or(ArenaError::InvalidBytecode)?;
+        require!(!code.is_empty() && code.len() <= MAX_BYTECODE_LEN, ArenaError::InvalidBytecode);
+        match_logic::validate_bytecode(code).map_err(|_| ArenaError::InvalidBytecode)?;
 
-    // Verify commitment: SHA256(strategy_byte || param_bytes[5] || salt[16])
-    let mut preimage = Vec::with_capacity(22);
-    preimage.push(strategy as u8);
-    preimage.push(params.forgiveness);
-    preimage.push(params.retaliation_delay);
-    preimage.push(params.noise_tolerance);
-    preimage.push(params.initial_moves);
-    preimage.push(params.cooperate_bias);
-    preimage.extend_from_slice(&salt);
+        // Two-level commitment: SHA256(9u8 || SHA256(bytecode) || salt[16])
+        let bytecode_hash = solana_sha256_hasher::hash(code);
+        let mut preimage = Vec::with_capacity(49);
+        preimage.push(Strategy::Custom as u8);
+        preimage.extend_from_slice(&bytecode_hash.to_bytes());
+        preimage.extend_from_slice(&salt);
 
-    let hash = solana_sha256_hasher::hash(&preimage);
-    require!(
-        hash.to_bytes() == entry.commitment,
-        ArenaError::CommitmentMismatch
-    );
+        let hash = solana_sha256_hasher::hash(&preimage);
+        require!(
+            hash.to_bytes() == entry.commitment,
+            ArenaError::CommitmentMismatch
+        );
+
+        // Store bytecode in entry
+        entry.bytecode_len = code.len() as u8;
+        entry.bytecode[..code.len()].copy_from_slice(code);
+    } else {
+        // Builtin strategy: SHA256(strategy_u8 || salt[16]) — 17-byte preimage
+        let mut preimage = Vec::with_capacity(17);
+        preimage.push(strategy as u8);
+        preimage.extend_from_slice(&salt);
+
+        let hash = solana_sha256_hasher::hash(&preimage);
+        require!(
+            hash.to_bytes() == entry.commitment,
+            ArenaError::CommitmentMismatch
+        );
+    }
 
     // Store revealed strategy
     entry.strategy = strategy;
-    entry.strategy_params = params;
     entry.revealed = true;
 
     // Update tournament vecs
     let idx = entry.index as usize;
     tournament.strategies[idx] = strategy as u8;
-    tournament.strategy_params[idx] = params;
 
     // Track progress
     tournament.reveals_completed += 1;
@@ -246,7 +258,6 @@ pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
     // Mark player slot as refunded (set to default pubkey)
     tournament.players[entry.index as usize] = Pubkey::default();
     tournament.strategies[entry.index as usize] = u8::MAX; // 255 = refunded/invalid
-    tournament.strategy_params[entry.index as usize] = StrategyParams::default();
     tournament.participant_count -= 1;
     tournament.entries_remaining -= 1;
     tournament.pool -= refund_amount;

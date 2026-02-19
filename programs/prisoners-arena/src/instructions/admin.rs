@@ -123,7 +123,6 @@ pub fn initialize_config(
     tournament.players = Vec::new();
     tournament.scores = Vec::new();
     tournament.strategies = Vec::new();
-    tournament.strategy_params = Vec::new();
     tournament.bump = ctx.bumps.tournament;
     tournament.operator_costs = 0;
 

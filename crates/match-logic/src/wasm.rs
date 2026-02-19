@@ -3,19 +3,38 @@
 #![cfg(feature = "wasm")]
 
 use wasm_bindgen::prelude::*;
-use crate::{run_match, Strategy, MatchResult, StrategyBase, StrategyParams};
+use crate::{run_match, Strategy, StrategyBase, PlayerStrategy};
+use crate::{effective_k, expected_rounds, RoundConfig};
 use crate::strategy::describe_strategy;
 use crate::pairing::{generate_all_pairings, get_pairing_for_match, calculate_match_count};
+use crate::vm::validate_bytecode;
+
+/// Parse a strategy JSON string into a PlayerStrategy.
+///
+/// Accepts two formats:
+/// - Builtin: `{"base": "TitForTat", "params": {...}}` (legacy Strategy JSON)
+/// - Custom:  `{"Custom": [2, 24]}` (PlayerStrategy::Custom bytecode array)
+/// - Full:    `{"Builtin": {"base": "TitForTat", "params": {...}}}` (PlayerStrategy JSON)
+fn parse_player_strategy(json: &str) -> Result<PlayerStrategy, String> {
+    // Try PlayerStrategy first (handles both Builtin and Custom variants)
+    if let Ok(ps) = serde_json::from_str::<PlayerStrategy>(json) {
+        return Ok(ps);
+    }
+    // Fall back to legacy Strategy format → wrap in Builtin
+    let s: Strategy = serde_json::from_str(json)
+        .map_err(|e| format!("Invalid strategy: {}", e))?;
+    Ok(PlayerStrategy::Builtin(s))
+}
 
 /// Replay a match with full round-by-round details
-/// 
+///
 /// # Arguments
-/// * `strategy_a_json` - JSON serialized Strategy for player A
-/// * `strategy_b_json` - JSON serialized Strategy for player B  
+/// * `strategy_a_json` - JSON serialized PlayerStrategy or Strategy for player A
+/// * `strategy_b_json` - JSON serialized PlayerStrategy or Strategy for player B
 /// * `seed` - 32-byte tournament randomness seed
 /// * `match_index` - Index of this match
 /// * `participant_count` - Number of tournament participants (determines round config)
-/// 
+///
 /// # Returns
 /// JSON serialized MatchResult
 #[wasm_bindgen]
@@ -26,16 +45,16 @@ pub fn replay_match(
     match_index: u32,
     participant_count: u32,
 ) -> Result<JsValue, JsError> {
-    let strategy_a: Strategy = serde_json::from_str(strategy_a_json)
+    let strategy_a = parse_player_strategy(strategy_a_json)
         .map_err(|e| JsError::new(&format!("Invalid strategy A: {}", e)))?;
-    let strategy_b: Strategy = serde_json::from_str(strategy_b_json)
+    let strategy_b = parse_player_strategy(strategy_b_json)
         .map_err(|e| JsError::new(&format!("Invalid strategy B: {}", e)))?;
-    
+
     let seed_arr: [u8; 32] = seed.try_into()
         .map_err(|_| JsError::new("Seed must be exactly 32 bytes"))?;
-    
+
     let result = run_match(&strategy_a, &strategy_b, &seed_arr, match_index, participant_count);
-    
+
     serde_wasm_bindgen::to_value(&result)
         .map_err(|e| JsError::new(&format!("Serialization error: {}", e)))
 }
@@ -111,15 +130,10 @@ struct StrategyInfo {
     description: String,
 }
 
-/// Create a strategy JSON from base type and parameters
+/// Create a strategy JSON from base type
 #[wasm_bindgen]
 pub fn create_strategy(
     base: &str,
-    forgiveness: u8,
-    retaliation_delay: u8,
-    noise_tolerance: u8,
-    initial_moves: u8,
-    cooperate_bias: u8,
 ) -> Result<String, JsError> {
     let base = match base {
         "TitForTat" => StrategyBase::TitForTat,
@@ -133,18 +147,9 @@ pub fn create_strategy(
         "Gradual" => StrategyBase::Gradual,
         _ => return Err(JsError::new(&format!("Unknown strategy: {}", base))),
     };
-    
-    let strategy = Strategy {
-        base,
-        params: StrategyParams {
-            forgiveness,
-            retaliation_delay,
-            noise_tolerance,
-            initial_moves,
-            cooperate_bias,
-        },
-    };
-    
+
+    let strategy = Strategy::new(base);
+
     serde_json::to_string(&strategy)
         .map_err(|e| JsError::new(&format!("Serialization error: {}", e)))
 }
@@ -182,6 +187,26 @@ pub fn get_match_pairing(
         .map_err(|e| JsError::new(&format!("Serialization error: {}", e)))
 }
 
+#[derive(serde::Serialize)]
+struct ValidationResult {
+    valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Validate custom bytecode program
+///
+/// Returns `{valid: true}` or `{valid: false, error: "..."}`.
+/// Never throws — validation errors are returned as structured data.
+#[wasm_bindgen]
+pub fn validate_custom_bytecode(bytecode: &[u8]) -> JsValue {
+    let result = match validate_bytecode(bytecode) {
+        Ok(()) => ValidationResult { valid: true, error: None },
+        Err(e) => ValidationResult { valid: false, error: Some(e.to_string()) },
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
 /// Get total match count for a tournament
 #[wasm_bindgen]
 pub fn get_match_count(
@@ -191,6 +216,52 @@ pub fn get_match_count(
 ) -> Result<u32, JsError> {
     let seed_arr: [u8; 32] = seed.try_into()
         .map_err(|_| JsError::new("Seed must be exactly 32 bytes"))?;
-    
+
     Ok(calculate_match_count(participant_count, opponents_per_agent, &seed_arr))
+}
+
+/// Calculate effective K (matches per player) for given tournament parameters
+#[wasm_bindgen]
+pub fn get_effective_k(participant_count: u32, config_k: u16) -> u16 {
+    effective_k(participant_count, config_k)
+}
+
+#[derive(serde::Serialize)]
+struct MatchmakingStats {
+    effective_k: u16,
+    tier: String,
+    min_rounds: u8,
+    max_rounds: u8,
+    end_probability: u8,
+    avg_rounds: f64,
+    total_matches: u32,
+}
+
+/// Get matchmaking statistics for a tournament configuration.
+///
+/// Returns a JSON object with: effective_k, tier, min_rounds, max_rounds,
+/// end_probability, avg_rounds, total_matches.
+#[wasm_bindgen]
+pub fn get_matchmaking_stats(participant_count: u32, config_k: u16) -> Result<JsValue, JsError> {
+    let k = effective_k(participant_count, config_k);
+    let (tier, config) = if participant_count <= 1000 {
+        ("Standard", RoundConfig::standard())
+    } else {
+        ("Compressed", RoundConfig::compressed())
+    };
+    let avg_rounds = expected_rounds(&config);
+    let total_matches = participant_count * k as u32 / 2;
+
+    let stats = MatchmakingStats {
+        effective_k: k,
+        tier: tier.to_string(),
+        min_rounds: config.min_rounds,
+        max_rounds: config.max_rounds,
+        end_probability: config.end_probability,
+        avg_rounds,
+        total_matches,
+    };
+
+    serde_wasm_bindgen::to_value(&stats)
+        .map_err(|e| JsError::new(&format!("Serialization error: {}", e)))
 }

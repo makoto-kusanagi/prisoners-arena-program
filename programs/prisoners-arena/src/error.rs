@@ -67,9 +67,6 @@ pub enum ArenaError {
     #[msg("Tournament closure period not yet reached (30 days after payout)")]
     TournamentNotCloseable = 6020,
 
-    #[msg("Invalid strategy parameters")]
-    InvalidParams = 6021,
-
     // v1.7 Commit-Reveal errors
     #[msg("Commitment does not match revealed strategy")]
     CommitmentMismatch = 6022,
@@ -91,4 +88,7 @@ pub enum ArenaError {
 
     #[msg("Minimum participants not reached")]
     MinParticipantsNotReached = 6028,
+
+    #[msg("Invalid custom strategy bytecode")]
+    InvalidBytecode = 6029,
 }

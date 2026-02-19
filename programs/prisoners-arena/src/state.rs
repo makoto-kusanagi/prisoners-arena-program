@@ -146,16 +146,14 @@ pub struct Tournament {
     pub scores: Vec<u32>,
     /// Strategies indexed by entry.index (persists after entry closure; 255 = refunded/invalid)
     pub strategies: Vec<u8>,
-    /// Strategy parameters indexed by entry.index
-    pub strategy_params: Vec<StrategyParams>,
     /// PDA bump seed
     pub bump: u8,
     /// Accumulated operator costs for reimbursement at finalization
     pub operator_costs: u64,
 }
 
-/// Bytes added per player (32-byte pubkey + 4-byte score + 1-byte strategy + 5-byte params)
-pub const BYTES_PER_PLAYER: usize = 42;
+/// Bytes added per player (32-byte pubkey + 4-byte score + 1-byte strategy)
+pub const BYTES_PER_PLAYER: usize = 37;
 
 impl Tournament {
     /// Base space for tournament with empty vecs (used for initial allocation)
@@ -186,7 +184,6 @@ impl Tournament {
         4 +   // players vec len (empty)
         4 +   // scores vec len (empty)
         4 +   // strategies vec len (empty)
-        4 +   // strategy_params vec len (empty)
         1 +   // bump
         8 +   // operator_costs (NEW v1.8)
         32;   // padding (was 8, expanded for future fields)
@@ -215,10 +212,12 @@ pub enum Strategy {
     Random,
     TitForTwoTats,
     Gradual,
+    /// Custom bytecode strategy (bytecode stored in Entry account)
+    Custom,
 }
 
 impl Strategy {
-    /// Map a u8 index (0–8) to the corresponding Strategy variant.
+    /// Map a u8 index (0–9) to the corresponding Strategy variant.
     pub fn from_index(index: u8) -> Option<Strategy> {
         match index {
             0 => Some(Strategy::TitForTat),
@@ -230,36 +229,14 @@ impl Strategy {
             6 => Some(Strategy::Random),
             7 => Some(Strategy::TitForTwoTats),
             8 => Some(Strategy::Gradual),
+            9 => Some(Strategy::Custom),
             _ => None,
-        }
-    }
-}
-
-/// Strategy parameters for fine-tuning behavior
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StrategyParams {
-    pub forgiveness: u8,
-    pub retaliation_delay: u8,
-    pub noise_tolerance: u8,
-    pub initial_moves: u8,
-    pub cooperate_bias: u8,
-}
-
-impl Default for StrategyParams {
-    fn default() -> Self {
-        Self {
-            forgiveness: 0,
-            retaliation_delay: 0,
-            noise_tolerance: 0,
-            initial_moves: 0,
-            cooperate_bias: 50,
         }
     }
 }
 
 /// Player entry in a tournament
 #[account]
-#[derive(Default)]
 pub struct Entry {
     /// Parent tournament
     pub tournament: Pubkey,
@@ -271,8 +248,6 @@ pub struct Entry {
     pub commitment: [u8; 32],
     /// Player's strategy (zeroed until reveal)
     pub strategy: Strategy,
-    /// Strategy parameters (zeroed until reveal)
-    pub strategy_params: StrategyParams,
     /// Has player revealed? (NEW v1.7)
     pub revealed: bool,
     /// Accumulated score (synced with tournament.scores[index] during run_matches)
@@ -285,6 +260,10 @@ pub struct Entry {
     pub created_at: i64,
     /// PDA bump seed
     pub bump: u8,
+    /// Custom bytecode length (0 for builtin strategies)
+    pub bytecode_len: u8,
+    /// Custom bytecode program (only first bytecode_len bytes are used)
+    pub bytecode: [u8; 64],
 }
 
 impl Entry {
@@ -294,34 +273,61 @@ impl Entry {
         4 +   // index
         32 +  // commitment (NEW v1.7)
         1 +   // strategy (enum)
-        5 +   // strategy_params
         1 +   // revealed (NEW v1.7)
         4 +   // score
         2 +   // matches_played
         1 +   // paid_out
         8 +   // created_at
         1 +   // bump
+        1 +   // bytecode_len (NEW v1.9)
+        64 +  // bytecode (NEW v1.9)
         16;   // padding
 }
 
-/// Convert on-chain strategy + params to match-logic types
-pub fn to_match_strategy(strategy: Strategy, params: &StrategyParams) -> match_logic::Strategy {
-    let base = match strategy {
-        Strategy::TitForTat => match_logic::StrategyBase::TitForTat,
-        Strategy::AlwaysDefect => match_logic::StrategyBase::AlwaysDefect,
-        Strategy::AlwaysCooperate => match_logic::StrategyBase::AlwaysCooperate,
-        Strategy::GrimTrigger => match_logic::StrategyBase::GrimTrigger,
-        Strategy::Pavlov => match_logic::StrategyBase::Pavlov,
-        Strategy::SuspiciousTitForTat => match_logic::StrategyBase::SuspiciousTitForTat,
-        Strategy::Random => match_logic::StrategyBase::Random,
-        Strategy::TitForTwoTats => match_logic::StrategyBase::TitForTwoTats,
-        Strategy::Gradual => match_logic::StrategyBase::Gradual,
-    };
-    match_logic::Strategy::with_params(base, match_logic::StrategyParams {
-        forgiveness: params.forgiveness,
-        retaliation_delay: params.retaliation_delay,
-        noise_tolerance: params.noise_tolerance,
-        initial_moves: params.initial_moves,
-        cooperate_bias: params.cooperate_bias,
-    })
+impl Default for Entry {
+    fn default() -> Self {
+        Self {
+            tournament: Pubkey::default(),
+            player: Pubkey::default(),
+            index: 0,
+            commitment: [0u8; 32],
+            strategy: Strategy::default(),
+            revealed: false,
+            score: 0,
+            matches_played: 0,
+            paid_out: false,
+            created_at: 0,
+            bump: 0,
+            bytecode_len: 0,
+            bytecode: [0u8; 64],
+        }
+    }
+}
+
+/// Convert on-chain strategy + optional bytecode to match-logic PlayerStrategy.
+///
+/// For builtin strategies (0–8), bytecode is ignored.
+/// For Custom (9), bytecode must be provided.
+pub fn to_player_strategy(strategy: Strategy, bytecode: Option<&[u8]>) -> match_logic::PlayerStrategy {
+    match strategy {
+        Strategy::Custom => {
+            let code = bytecode.unwrap_or(&[]);
+            match_logic::PlayerStrategy::Custom(code.to_vec())
+        }
+        _ => {
+            let base = match strategy {
+                Strategy::TitForTat => match_logic::StrategyBase::TitForTat,
+                Strategy::AlwaysDefect => match_logic::StrategyBase::AlwaysDefect,
+                Strategy::AlwaysCooperate => match_logic::StrategyBase::AlwaysCooperate,
+                Strategy::GrimTrigger => match_logic::StrategyBase::GrimTrigger,
+                Strategy::Pavlov => match_logic::StrategyBase::Pavlov,
+                Strategy::SuspiciousTitForTat => match_logic::StrategyBase::SuspiciousTitForTat,
+                Strategy::Random => match_logic::StrategyBase::Random,
+                Strategy::TitForTwoTats => match_logic::StrategyBase::TitForTwoTats,
+                Strategy::Gradual => match_logic::StrategyBase::Gradual,
+                Strategy::Custom => unreachable!(),
+            };
+            match_logic::PlayerStrategy::Builtin(match_logic::Strategy::new(base))
+        }
+    }
 }

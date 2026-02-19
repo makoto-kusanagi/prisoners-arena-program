@@ -2,7 +2,9 @@
 
 # Prisoner's Arena Program
 
-Competitive AI tournament platform on Solana implementing the Iterated Prisoner's Dilemma. Players stake SOL, select strategies with configurable parameters, compete in automated matches, and split prizes.
+**Competitive AI Tournament on Solana**
+
+Players stake SOL, select from built-in strategies or author custom bytecode programs, and compete in automated Iterated Prisoner's Dilemma matches for a share of the prize pool.
 
 [prisoners-arena.com](https://prisoners-arena.com)
 
@@ -17,7 +19,7 @@ The Prisoner's Dilemma is a game theory scenario where two players independently
 | **Cooperate** | 3, 3 | 0, 5 |
 | **Defect** | 5, 0 | 1, 1 |
 
-For full rules, available strategies, configurable parameters, and tournament lifecycle details, see [How It Works](https://prisoners-arena.com/docs).
+For full rules, available strategies, and tournament lifecycle details, see [How It Works](https://prisoners-arena.com/docs).
 
 ## Verifying the On-Chain Program
 
@@ -40,7 +42,11 @@ The Anchor program manages tournament state, player entries, and fund custody. T
 
 ### Match Logic (`crates/match-logic`)
 
-A pure, dependency-minimal crate that implements strategy behavior, match execution, round-robin pairing, and seeded RNG. Deterministic by design: given the same inputs (strategies, parameters, seed), every execution produces identical results. This makes matches independently verifiable.
+A pure, dependency-minimal crate that implements strategy behavior, match execution, round-robin pairing, and seeded RNG. Deterministic by design: given the same inputs (strategies, seed), every execution produces identical results. This makes matches independently verifiable.
+
+### Custom Strategy VM (`crates/match-logic/vm.rs`)
+
+Players can author custom strategies as compact bytecode programs (up to 64 bytes), interpreted on-chain within the match execution pipeline. The stack-based VM has 25 opcodes, 128-instruction fuel limit per round, and fails safe to Cooperate on any error. Strategy index 9 selects Custom; builtins (0–8) remain as native optimized code paths with zero performance regression.
 
 ### Tournament State Machine
 
@@ -49,7 +55,7 @@ Registration → Reveal → Running → Payout
 ```
 
 - **Registration** — Players submit a commitment hash and stake SOL.
-- **Reveal** — Players disclose their strategy, params, and salt. The contract verifies each reveal against its commitment.
+- **Reveal** — Players disclose their strategy, salt, and bytecode (for custom strategies). The contract verifies each reveal against its commitment.
 - **Running** — An operator executes matches in batches. All match logic runs on-chain using the shared crate.
 - **Payout** — Top 25% of players by score are winners. Winners claim their share of the prize pool.
 
@@ -82,6 +88,37 @@ cargo test -p match-logic
 anchor test --provider.cluster localnet -- --features testing
 ```
 
+### Testing Custom Strategies
+
+Add `match-logic` as a dependency to test custom bytecode programs locally. The same code that runs on-chain executes on your machine — results are deterministic given the same seed.
+
+```rust
+use match_logic::{validate_bytecode, run_match, PlayerStrategy, Strategy, StrategyBase};
+
+fn main() {
+    // TitForTat as bytecode: OPP_LAST RETURN
+    let bytecode = vec![0x02, 0x18];
+
+    // Validate before submitting on-chain
+    validate_bytecode(&bytecode).expect("invalid program");
+
+    // Test against a builtin strategy
+    let custom   = PlayerStrategy::Custom(bytecode);
+    let defector = PlayerStrategy::Builtin(Strategy::new(StrategyBase::AlwaysDefect));
+
+    let seed = [0u8; 32];
+    let result = run_match(&custom, &defector, &seed, 0, 8);
+
+    println!("Custom: {} | Defector: {}", result.total_score_a, result.total_score_b);
+    for r in &result.rounds {
+        println!("  R{}: {:?} vs {:?} -> {}-{}",
+            r.round, r.move_a, r.move_b, r.score_a, r.score_b);
+    }
+}
+```
+
+`validate_bytecode()` runs the same 6 checks performed on-chain during reveal. `run_match()` executes a full match with round-by-round scores. See the [VM specification](https://prisoners-arena.com/docs/custom-strategy-vm) for the complete opcode reference.
+
 ### Format and Lint
 
 ```bash
@@ -101,7 +138,8 @@ cargo clippy
 ## Links
 
 - [prisoners-arena.com](https://prisoners-arena.com)
-- [How It Works](https://prisoners-arena.com/docs) — Rules, strategies, parameters, and tournament lifecycle
+- [How It Works](https://prisoners-arena.com/docs) — Rules, strategies, and tournament lifecycle
+- [Custom Strategy VM](https://prisoners-arena.com/docs/custom-strategy-vm) — Bytecode VM specification for custom strategies
 - [API Documentation](https://prisoners-arena.com/api) — REST API for querying on-chain state
 
 ## License

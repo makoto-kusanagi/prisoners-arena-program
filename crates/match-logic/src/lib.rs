@@ -9,14 +9,16 @@ mod random;
 mod strategy;
 mod game;
 mod pairing;
+pub mod vm;
 
 #[cfg(feature = "wasm")]
 mod wasm;
 
 pub use random::SeededRng;
-pub use strategy::{Move, Strategy, StrategyBase, StrategyParams};
-pub use game::{run_match, MatchResult, RoundResult, RoundConfig};
+pub use strategy::{Move, Strategy, StrategyBase, PlayerStrategy, execute_player_strategy};
+pub use game::{run_match, MatchResult, RoundResult, RoundConfig, expected_rounds};
 pub use pairing::{generate_all_pairings, get_pairing_for_match, calculate_match_count, effective_k};
+pub use vm::{validate_bytecode, execute_bytecode, BytecodeError, MAX_BYTECODE_LEN};
 
 /// Payoff matrix for the Prisoner's Dilemma
 /// Returns (score_a, score_b)

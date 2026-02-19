@@ -11,7 +11,6 @@ mod error;
 
 use instructions::*;
 pub use state::Strategy;
-pub use state::StrategyParams;
 
 declare_id!("89Pm5Qy61r1K8dLY1Z1fsJLu3PBN5tTLfZFoEAhejDYa");
 
@@ -62,10 +61,10 @@ pub mod prisoners_arena {
     pub fn reveal_strategy(
         ctx: Context<RevealStrategy>,
         strategy: state::Strategy,
-        params: state::StrategyParams,
         salt: [u8; 16],
+        bytecode: Option<Vec<u8>>,
     ) -> Result<()> {
-        instructions::player::reveal_strategy(ctx, strategy, params, salt)
+        instructions::player::reveal_strategy(ctx, strategy, salt, bytecode)
     }
 
     /// Claim refund during registration or reveal phase

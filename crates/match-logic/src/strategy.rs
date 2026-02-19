@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use crate::random::SeededRng;
+use crate::vm;
 
 /// A move in the Prisoner's Dilemma
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,52 +34,16 @@ pub enum StrategyBase {
     Gradual,
 }
 
-/// Strategy parameters for fine-tuning behavior
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StrategyParams {
-    /// Percentage chance to cooperate after opponent defects (0-100)
-    pub forgiveness: u8,
-    /// Rounds to wait before retaliating (0-10)
-    pub retaliation_delay: u8,
-    /// Number of defections to ignore before retaliating (0-5)
-    pub noise_tolerance: u8,
-    /// Bitmask of first 8 moves (1 = defect, 0 = use strategy)
-    pub initial_moves: u8,
-    /// Bias toward cooperation for Random strategy (0-100)
-    pub cooperate_bias: u8,
-}
-
-impl Default for StrategyParams {
-    fn default() -> Self {
-        Self {
-            forgiveness: 0,
-            retaliation_delay: 0,
-            noise_tolerance: 0,
-            initial_moves: 0,
-            cooperate_bias: 50,
-        }
-    }
-}
-
-/// Complete strategy with base type and parameters
+/// Complete strategy with base type
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Strategy {
     pub base: StrategyBase,
-    pub params: StrategyParams,
 }
 
 impl Strategy {
-    /// Create a new strategy with default parameters
+    /// Create a new strategy
     pub fn new(base: StrategyBase) -> Self {
-        Self {
-            base,
-            params: StrategyParams::default(),
-        }
-    }
-    
-    /// Create with custom parameters
-    pub fn with_params(base: StrategyBase, params: StrategyParams) -> Self {
-        Self { base, params }
+        Self { base }
     }
 }
 
@@ -100,40 +65,32 @@ pub fn execute_strategy(
     strategy: &Strategy,
     opponent_history: &[Move],
     my_history: &[Move],
-    round: u8,
+    _round: u8,
     rng: &mut SeededRng,
 ) -> Move {
-    // Check initial_moves override (first 8 rounds)
-    if round < 8 {
-        let bit = (strategy.params.initial_moves >> round) & 1;
-        if bit == 1 {
-            return Move::Defect;
-        }
-    }
-    
     match strategy.base {
         StrategyBase::TitForTat => {
-            execute_tit_for_tat(opponent_history, &strategy.params, rng)
+            execute_tit_for_tat(opponent_history)
         }
         StrategyBase::AlwaysDefect => Move::Defect,
         StrategyBase::AlwaysCooperate => Move::Cooperate,
         StrategyBase::GrimTrigger => {
-            execute_grim_trigger(opponent_history, &strategy.params)
+            execute_grim_trigger(opponent_history)
         }
         StrategyBase::Pavlov => {
             execute_pavlov(opponent_history, my_history)
         }
         StrategyBase::SuspiciousTitForTat => {
-            execute_suspicious_tit_for_tat(opponent_history, &strategy.params, rng)
+            execute_suspicious_tit_for_tat(opponent_history)
         }
         StrategyBase::Random => {
-            execute_random(&strategy.params, rng)
+            execute_random(rng)
         }
         StrategyBase::TitForTwoTats => {
             execute_tit_for_two_tats(opponent_history)
         }
         StrategyBase::Gradual => {
-            execute_gradual(opponent_history, my_history, &strategy.params)
+            execute_gradual(opponent_history, my_history)
         }
     }
 }
@@ -141,46 +98,23 @@ pub fn execute_strategy(
 /// Tit-for-Tat: Copy opponent's last move, start with cooperate
 fn execute_tit_for_tat(
     opponent_history: &[Move],
-    params: &StrategyParams,
-    rng: &mut SeededRng,
 ) -> Move {
     match opponent_history.last() {
         None => Move::Cooperate,
         Some(Move::Cooperate) => Move::Cooperate,
-        Some(Move::Defect) => {
-            // Retaliation delay: wait N rounds after seeing defection
-            if params.retaliation_delay > 0 {
-                let last_defect_pos = opponent_history.iter().rposition(|m| *m == Move::Defect);
-                if let Some(pos) = last_defect_pos {
-                    let rounds_since = opponent_history.len() - 1 - pos;
-                    if rounds_since < params.retaliation_delay as usize {
-                        return Move::Cooperate;
-                    }
-                }
-            }
-            // Forgiveness: chance to cooperate anyway
-            if params.forgiveness > 0 && rng.next_percent() < params.forgiveness {
-                Move::Cooperate
-            } else {
-                Move::Defect
-            }
-        }
+        Some(Move::Defect) => Move::Defect,
     }
 }
 
-/// Grim Trigger: Cooperate until opponent defects, then always defect
+/// Grim Trigger: Cooperate until opponent defects once, then always defect
 fn execute_grim_trigger(
     opponent_history: &[Move],
-    params: &StrategyParams,
 ) -> Move {
-    // Count opponent defections
-    let defection_count = opponent_history
+    let has_defection = opponent_history
         .iter()
-        .filter(|m| **m == Move::Defect)
-        .count();
-    
-    // Trigger if defections exceed noise tolerance
-    if defection_count > params.noise_tolerance as usize {
+        .any(|m| *m == Move::Defect);
+
+    if has_defection {
         Move::Defect
     } else {
         Move::Cooperate
@@ -219,44 +153,23 @@ fn execute_pavlov(
 /// Suspicious Tit-for-Tat: TFT but start with defect
 fn execute_suspicious_tit_for_tat(
     opponent_history: &[Move],
-    params: &StrategyParams,
-    rng: &mut SeededRng,
 ) -> Move {
     if opponent_history.is_empty() {
         return Move::Defect; // Start suspicious
     }
-    
+
     match opponent_history.last() {
         Some(Move::Cooperate) => Move::Cooperate,
-        Some(Move::Defect) => {
-            // Retaliation delay: wait N rounds after seeing defection
-            if params.retaliation_delay > 0 {
-                let last_defect_pos = opponent_history.iter().rposition(|m| *m == Move::Defect);
-                if let Some(pos) = last_defect_pos {
-                    let rounds_since = opponent_history.len() - 1 - pos;
-                    if rounds_since < params.retaliation_delay as usize {
-                        return Move::Cooperate;
-                    }
-                }
-            }
-            if params.forgiveness > 0 && rng.next_percent() < params.forgiveness {
-                Move::Cooperate
-            } else {
-                Move::Defect
-            }
-        }
+        Some(Move::Defect) => Move::Defect,
         None => Move::Defect,
     }
 }
 
-/// Random: Random choice with configurable bias
+/// Random: Random choice with 50% bias
 fn execute_random(
-    params: &StrategyParams,
     rng: &mut SeededRng,
 ) -> Move {
-    let bias = params.cooperate_bias;
-    
-    if rng.next_percent() < bias {
+    if rng.next_percent() < 50 {
         Move::Cooperate
     } else {
         Move::Defect
@@ -284,7 +197,6 @@ fn execute_tit_for_two_tats(
 fn execute_gradual(
     opponent_history: &[Move],
     my_history: &[Move],
-    _params: &StrategyParams,
 ) -> Move {
     // Count opponent defections
     let their_defections = opponent_history
@@ -308,32 +220,45 @@ fn execute_gradual(
     }
 }
 
+/// A strategy that is either a built-in type or custom bytecode.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayerStrategy {
+    /// One of the 9 built-in strategies.
+    Builtin(Strategy),
+    /// Custom bytecode program (max 64 bytes).
+    Custom(Vec<u8>),
+}
+
+/// Execute a player strategy for one round, dispatching to native or VM.
+pub fn execute_player_strategy(
+    strategy: &PlayerStrategy,
+    opponent_history: &[Move],
+    my_history: &[Move],
+    round: u8,
+    rng: &mut SeededRng,
+) -> Move {
+    match strategy {
+        PlayerStrategy::Builtin(s) => execute_strategy(s, opponent_history, my_history, round, rng),
+        PlayerStrategy::Custom(bytecode) => {
+            vm::execute_bytecode(bytecode, opponent_history, my_history, round, rng)
+        }
+    }
+}
+
 /// Get a human-readable description of a strategy (used by WASM module)
 #[allow(dead_code)]
 pub fn describe_strategy(strategy: &Strategy) -> String {
-    let base_desc = match strategy.base {
+    match strategy.base {
         StrategyBase::TitForTat => "Copies opponent's last move. Starts by cooperating.",
         StrategyBase::AlwaysDefect => "Never cooperates. Always defects.",
         StrategyBase::AlwaysCooperate => "Never defects. Always cooperates.",
         StrategyBase::GrimTrigger => "Cooperates until betrayed, then always defects.",
         StrategyBase::Pavlov => "Repeats move if outcome was good, switches if bad.",
         StrategyBase::SuspiciousTitForTat => "Like Tit-for-Tat, but starts with defect.",
-        StrategyBase::Random => "Randomly cooperates or defects each round.",
+        StrategyBase::Random => "Randomly cooperates or defects each round (50/50).",
         StrategyBase::TitForTwoTats => "Only retaliates after two consecutive defections.",
         StrategyBase::Gradual => "Retaliates with increasing severity, then forgives.",
-    };
-    
-    let mut desc = base_desc.to_string();
-    
-    if strategy.params.forgiveness > 0 {
-        desc.push_str(&format!(" {}% chance to forgive.", strategy.params.forgiveness));
-    }
-    
-    if strategy.params.noise_tolerance > 0 {
-        desc.push_str(&format!(" Tolerates {} accidental defections.", strategy.params.noise_tolerance));
-    }
-    
-    desc
+    }.to_string()
 }
 
 #[cfg(test)]
@@ -400,23 +325,6 @@ mod tests {
         
         // Defect forever after opponent defects
         let m = execute_strategy(&strategy, &[Move::Cooperate, Move::Defect], &[], 2, &mut rng);
-        assert_eq!(m, Move::Defect);
-    }
-    
-    #[test]
-    fn test_grim_trigger_noise_tolerance() {
-        let strategy = Strategy::with_params(
-            StrategyBase::GrimTrigger,
-            StrategyParams { noise_tolerance: 1, ..Default::default() }
-        );
-        let mut rng = make_rng();
-        
-        // Tolerate one defection
-        let m = execute_strategy(&strategy, &[Move::Defect], &[], 1, &mut rng);
-        assert_eq!(m, Move::Cooperate);
-        
-        // But not two
-        let m = execute_strategy(&strategy, &[Move::Defect, Move::Defect], &[], 2, &mut rng);
         assert_eq!(m, Move::Defect);
     }
     
@@ -495,101 +403,4 @@ mod tests {
         assert_eq!(m, Move::Defect);
     }
     
-    #[test]
-    fn test_initial_moves_override() {
-        let strategy = Strategy::with_params(
-            StrategyBase::AlwaysCooperate,
-            StrategyParams { initial_moves: 0b00000101, ..Default::default() }
-        );
-        let mut rng = make_rng();
-        
-        // Round 0: bit 0 is 1, should defect
-        assert_eq!(execute_strategy(&strategy, &[], &[], 0, &mut rng), Move::Defect);
-        
-        // Round 1: bit 1 is 0, should cooperate (strategy default)
-        assert_eq!(execute_strategy(&strategy, &[], &[], 1, &mut rng), Move::Cooperate);
-        
-        // Round 2: bit 2 is 1, should defect
-        assert_eq!(execute_strategy(&strategy, &[], &[], 2, &mut rng), Move::Defect);
-    }
-
-    #[test]
-    fn test_cooperate_bias_zero_means_always_defect() {
-        let strategy = Strategy::with_params(
-            StrategyBase::Random,
-            StrategyParams { cooperate_bias: 0, ..Default::default() }
-        );
-        let mut rng = make_rng();
-        // With bias=0, should always defect
-        for round in 0..20 {
-            assert_eq!(execute_strategy(&strategy, &[], &[], round, &mut rng), Move::Defect);
-        }
-    }
-
-    #[test]
-    fn test_cooperate_bias_100_means_always_cooperate() {
-        let strategy = Strategy::with_params(
-            StrategyBase::Random,
-            StrategyParams { cooperate_bias: 100, ..Default::default() }
-        );
-        let mut rng = make_rng();
-        for round in 0..20 {
-            assert_eq!(execute_strategy(&strategy, &[], &[], round, &mut rng), Move::Cooperate);
-        }
-    }
-
-    #[test]
-    fn test_default_cooperate_bias_is_50() {
-        let params = StrategyParams::default();
-        assert_eq!(params.cooperate_bias, 50);
-    }
-
-    #[test]
-    fn test_retaliation_delay_tft() {
-        // With delay=2, TFT should wait 2 rounds after seeing defection
-        let strategy = Strategy::with_params(
-            StrategyBase::TitForTat,
-            StrategyParams { retaliation_delay: 2, ..Default::default() }
-        );
-        let mut rng = make_rng();
-        
-        // Opponent defected on last move — round_since=0, delay=2, should cooperate
-        let m = execute_strategy(
-            &strategy,
-            &[Move::Cooperate, Move::Defect],
-            &[Move::Cooperate, Move::Cooperate],
-            2, &mut rng
-        );
-        assert_eq!(m, Move::Cooperate);
-        
-        // Opponent defected 3 rounds ago — rounds_since=2, delay=2, should defect
-        let m = execute_strategy(
-            &strategy,
-            &[Move::Defect, Move::Cooperate, Move::Cooperate],
-            &[Move::Cooperate, Move::Cooperate, Move::Cooperate],
-            3, &mut rng
-        );
-        // Last move is Cooperate, so TFT would cooperate anyway
-        assert_eq!(m, Move::Cooperate);
-    }
-
-    #[test]
-    fn test_forgiveness_statistical() {
-        // With 100% forgiveness, TFT should always cooperate even after defection
-        let strategy = Strategy::with_params(
-            StrategyBase::TitForTat,
-            StrategyParams { forgiveness: 100, ..Default::default() }
-        );
-        let mut rng = make_rng();
-        
-        for _ in 0..20 {
-            let m = execute_strategy(
-                &strategy,
-                &[Move::Defect],
-                &[Move::Cooperate],
-                1, &mut rng
-            );
-            assert_eq!(m, Move::Cooperate);
-        }
-    }
 }

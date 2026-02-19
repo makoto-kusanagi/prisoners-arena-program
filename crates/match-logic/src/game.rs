@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use crate::random::SeededRng;
-use crate::strategy::{execute_strategy, Move, Strategy};
+use crate::strategy::{execute_player_strategy, Move, PlayerStrategy};
+#[cfg(test)]
+use crate::strategy::Strategy;
 use crate::payoff;
 
 /// Result of a single round
@@ -46,6 +48,21 @@ impl RoundConfig {
     }
 }
 
+/// Expected number of rounds per match for a given config (analytical, no RNG).
+///
+/// Uses geometric distribution: after `min_rounds`, each round has
+/// `end_probability`% chance of ending, capped at `max_rounds`.
+pub fn expected_rounds(config: &RoundConfig) -> f64 {
+    let extra = (config.max_rounds - config.min_rounds) as f64;
+    if extra <= 0.0 {
+        return config.min_rounds as f64;
+    }
+    let p = config.end_probability as f64 / 100.0;
+    let survival = 1.0 - p;
+    // E[extra rounds] = sum_{i=0}^{extra-1} survival^i = (1 - survival^extra) / p
+    config.min_rounds as f64 + (1.0 - survival.powf(extra)) / p
+}
+
 /// Determine how many rounds this match will have
 /// 
 /// Uses geometric distribution with configurable parameters
@@ -63,19 +80,19 @@ fn determine_round_count(rng: &mut SeededRng, config: &RoundConfig) -> u8 {
 }
 
 /// Run a complete match between two strategies
-/// 
+///
 /// # Arguments
 /// * `strategy_a` - First player's strategy
 /// * `strategy_b` - Second player's strategy
 /// * `seed` - Tournament randomness seed
 /// * `match_index` - Index of this match in the tournament
 /// * `participant_count` - Number of participants (determines round config tier)
-/// 
+///
 /// # Returns
 /// Complete match result with round-by-round details
 pub fn run_match(
-    strategy_a: &Strategy,
-    strategy_b: &Strategy,
+    strategy_a: &PlayerStrategy,
+    strategy_b: &PlayerStrategy,
     seed: &[u8; 32],
     match_index: u32,
     participant_count: u32,
@@ -100,8 +117,8 @@ pub fn run_match(
         let mut rng_b = rng.for_round(round * 2 + 1);
         
         // Execute strategies simultaneously
-        let move_a = execute_strategy(strategy_a, &history_b, &history_a, round, &mut rng_a);
-        let move_b = execute_strategy(strategy_b, &history_a, &history_b, round, &mut rng_b);
+        let move_a = execute_player_strategy(strategy_a, &history_b, &history_a, round, &mut rng_a);
+        let move_b = execute_player_strategy(strategy_b, &history_a, &history_b, round, &mut rng_b);
         
         // Calculate payoffs
         let (score_a, score_b) = payoff(move_a, move_b);
@@ -134,6 +151,11 @@ pub fn run_match(
 mod tests {
     use super::*;
     use crate::strategy::StrategyBase;
+
+    /// Wrap a builtin Strategy into a PlayerStrategy for test convenience.
+    fn b(base: StrategyBase) -> PlayerStrategy {
+        PlayerStrategy::Builtin(Strategy::new(base))
+    }
 
     #[test]
     fn test_round_count_in_range() {
@@ -169,9 +191,9 @@ mod tests {
     #[test]
     fn test_match_determinism() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::TitForTat);
-        let strategy_b = Strategy::new(StrategyBase::Random);
-        
+        let strategy_a = b(StrategyBase::TitForTat);
+        let strategy_b = b(StrategyBase::Random);
+
         let result1 = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
         let result2 = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
         
@@ -188,9 +210,9 @@ mod tests {
     #[test]
     fn test_different_matches_differ() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::Random);
-        let strategy_b = Strategy::new(StrategyBase::Random);
-        
+        let strategy_a = b(StrategyBase::Random);
+        let strategy_b = b(StrategyBase::Random);
+
         let result1 = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
         let result2 = run_match(&strategy_a, &strategy_b, &seed, 1, 100);
         
@@ -205,11 +227,11 @@ mod tests {
     #[test]
     fn test_cooperate_vs_cooperate() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::AlwaysCooperate);
-        let strategy_b = Strategy::new(StrategyBase::AlwaysCooperate);
-        
+        let strategy_a = b(StrategyBase::AlwaysCooperate);
+        let strategy_b = b(StrategyBase::AlwaysCooperate);
+
         let result = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
-        
+
         // Both always cooperate, should get 3 points each per round
         for round in &result.rounds {
             assert_eq!(round.move_a, Move::Cooperate);
@@ -225,11 +247,11 @@ mod tests {
     #[test]
     fn test_defect_vs_cooperate() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::AlwaysDefect);
-        let strategy_b = Strategy::new(StrategyBase::AlwaysCooperate);
-        
+        let strategy_a = b(StrategyBase::AlwaysDefect);
+        let strategy_b = b(StrategyBase::AlwaysCooperate);
+
         let result = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
-        
+
         // A always defects, B always cooperates
         for round in &result.rounds {
             assert_eq!(round.move_a, Move::Defect);
@@ -245,11 +267,11 @@ mod tests {
     #[test]
     fn test_tft_vs_tft() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::TitForTat);
-        let strategy_b = Strategy::new(StrategyBase::TitForTat);
-        
+        let strategy_a = b(StrategyBase::TitForTat);
+        let strategy_b = b(StrategyBase::TitForTat);
+
         let result = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
-        
+
         // TFT vs TFT: both start cooperating and continue cooperating
         for round in &result.rounds {
             assert_eq!(round.move_a, Move::Cooperate);
@@ -260,9 +282,9 @@ mod tests {
     #[test]
     fn test_tft_vs_always_defect() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::TitForTat);
-        let strategy_b = Strategy::new(StrategyBase::AlwaysDefect);
-        
+        let strategy_a = b(StrategyBase::TitForTat);
+        let strategy_b = b(StrategyBase::AlwaysDefect);
+
         let result = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
         
         // Round 0: TFT cooperates, AD defects
@@ -279,11 +301,11 @@ mod tests {
     #[test]
     fn test_cumulative_scores() {
         let seed = [42u8; 32];
-        let strategy_a = Strategy::new(StrategyBase::AlwaysCooperate);
-        let strategy_b = Strategy::new(StrategyBase::AlwaysCooperate);
-        
+        let strategy_a = b(StrategyBase::AlwaysCooperate);
+        let strategy_b = b(StrategyBase::AlwaysCooperate);
+
         let result = run_match(&strategy_a, &strategy_b, &seed, 0, 100);
-        
+
         let mut expected_a = 0u32;
         let mut expected_b = 0u32;
         
@@ -348,8 +370,8 @@ mod tests {
     #[test]
     fn test_run_match_uses_standard_rounds() {
         let seed = [42u8; 32];
-        let sa = Strategy::new(StrategyBase::AlwaysCooperate);
-        let sb = Strategy::new(StrategyBase::AlwaysCooperate);
+        let sa = b(StrategyBase::AlwaysCooperate);
+        let sb = b(StrategyBase::AlwaysCooperate);
         for i in 0..50 {
             let result = run_match(&sa, &sb, &seed, i, 100);
             assert!(result.round_count >= 20 && result.round_count <= 50,
@@ -360,12 +382,63 @@ mod tests {
     #[test]
     fn test_run_match_uses_compressed_rounds() {
         let seed = [42u8; 32];
-        let sa = Strategy::new(StrategyBase::AlwaysCooperate);
-        let sb = Strategy::new(StrategyBase::AlwaysCooperate);
+        let sa = b(StrategyBase::AlwaysCooperate);
+        let sb = b(StrategyBase::AlwaysCooperate);
         for i in 0..50 {
             let result = run_match(&sa, &sb, &seed, i, 2000);
             assert!(result.round_count >= 10 && result.round_count <= 30,
                 "participant_count=2000: round_count {} not in [10,30]", result.round_count);
         }
+    }
+
+    #[test]
+    fn test_expected_rounds_standard() {
+        let config = RoundConfig::standard(); // min=20, max=50, p=5
+        let analytical = expected_rounds(&config);
+        // Closed-form: 20 + (1 - 0.95^30) / 0.05
+        let expected = 20.0 + (1.0 - 0.95_f64.powf(30.0)) / 0.05;
+        assert!((analytical - expected).abs() < 1e-10, "Analytical {} != expected {}", analytical, expected);
+        // Should be ~35.7
+        assert!(analytical > 35.0 && analytical < 36.5, "Standard expected_rounds {} not ~35.7", analytical);
+    }
+
+    #[test]
+    fn test_expected_rounds_compressed() {
+        let config = RoundConfig::compressed(); // min=10, max=30, p=7
+        let analytical = expected_rounds(&config);
+        let expected = 10.0 + (1.0 - 0.93_f64.powf(20.0)) / 0.07;
+        assert!((analytical - expected).abs() < 1e-10, "Analytical {} != expected {}", analytical, expected);
+        // Should be ~20.9
+        assert!(analytical > 20.0 && analytical < 22.0, "Compressed expected_rounds {} not ~20.9", analytical);
+    }
+
+    #[test]
+    fn test_expected_rounds_vs_monte_carlo() {
+        let seed = [42u8; 32];
+        let config = RoundConfig::standard();
+        let analytical = expected_rounds(&config);
+
+        // Monte Carlo average over many samples
+        let samples = 10_000;
+        let mut total = 0u64;
+        for i in 0..samples {
+            let mut rng = SeededRng::new(&seed, i);
+            total += determine_round_count(&mut rng, &config) as u64;
+        }
+        let mc_avg = total as f64 / samples as f64;
+
+        // Analytical and MC should be within 1 round of each other
+        assert!(
+            (analytical - mc_avg).abs() < 1.0,
+            "Analytical {} vs Monte Carlo {} differ by more than 1.0",
+            analytical, mc_avg,
+        );
+    }
+
+    #[test]
+    fn test_expected_rounds_degenerate() {
+        // min == max: no extra rounds
+        let config = RoundConfig { min_rounds: 10, max_rounds: 10, end_probability: 50 };
+        assert_eq!(expected_rounds(&config), 10.0);
     }
 }
