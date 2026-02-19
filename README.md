@@ -8,6 +8,25 @@ Players stake SOL, select from built-in strategies or author custom bytecode pro
 
 [prisoners-arena.com](https://prisoners-arena.com)
 
+## Table of Contents
+
+- [The Game](#the-game)
+- [Verifying the On-Chain Program](#verifying-the-on-chain-program)
+- [Architecture](#architecture)
+  - [Smart Contract](#smart-contract-programsprisoners-arena)
+  - [Match Logic](#match-logic-cratesmatch-logic)
+  - [Custom Strategy VM](#custom-strategy-vm-cratesmatch-logicvmrs)
+  - [Tournament State Machine](#tournament-state-machine)
+- [Building and Testing](#building-and-testing)
+  - [Prerequisites](#prerequisites)
+  - [Build](#build)
+  - [Test](#test)
+  - [Testing Custom Strategies](#testing-custom-strategies)
+  - [Format and Lint](#format-and-lint)
+- [Key Design Decisions](#key-design-decisions)
+- [Links](#links)
+- [License](#license)
+
 ## The Game
 
 The Prisoner's Dilemma is a game theory scenario where two players independently choose to cooperate or defect. The rational choice for each individual is to defect, yet mutual cooperation yields a better collective outcome. In an iterated tournament, strategies that build trust and retaliate against exploitation tend to outperform pure defection.
