@@ -12,7 +12,7 @@ mod error;
 use instructions::*;
 pub use state::Strategy;
 
-declare_id!("89Pm5Qy61r1K8dLY1Z1fsJLu3PBN5tTLfZFoEAhejDYa");
+declare_id!("7gJU56iACgPLsinhLCc2cSZs7ZuwSs1fHgFeDNdnZxSX");
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
