@@ -67,7 +67,7 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
 }
 
 /// Close the reveal phase and transition to Running
-/// Called by operator after reveal deadline + all forfeits processed
+/// Called by operator after reveal deadline + all unrevealed entries processed
 #[derive(Accounts)]
 pub struct CloseReveal<'info> {
     #[account(
@@ -89,6 +89,7 @@ pub struct CloseReveal<'info> {
     pub slot_hashes: AccountInfo<'info>,
 
     /// Optional: Entry to refund if odd active participant count
+    #[account(mut)]
     pub refund_entry: Option<Account<'info, Entry>>,
 
     /// Player to receive refund if odd count
@@ -121,14 +122,13 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
         .ok_or(ArenaError::Overflow)?;
 
     // Verify all non-forfeited players have revealed
-    let active_count = tournament.participant_count - tournament.forfeits;
     require!(
-        tournament.reveals_completed == active_count,
+        tournament.reveals_completed == tournament.participant_count,
         ArenaError::UnprocessedForfeits
     );
 
     // Handle zero active players (all forfeited/refunded)
-    if active_count == 0 {
+    if tournament.participant_count == 0 {
         // Transition to Running with 0 matches so finalize_tournament can
         // create the next tournament and sweep forfeited stakes to fees.
         tournament.state = TournamentState::Running;
@@ -139,7 +139,7 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
     }
 
     // If odd participant count, refund the last active registrant
-    if active_count % 2 == 1 {
+    if tournament.participant_count % 2 == 1 {
         // Find the last valid (non-refunded/non-forfeited) player
         let last_index = tournament.players.iter()
             .rposition(|pk| *pk != Pubkey::default())
@@ -173,12 +173,23 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
         tournament.reveals_completed -= 1;
         tournament.pool -= refund_amount;
 
+        // Close entry account: return rent to refunded player
+        let refund_entry_info = refund_entry.to_account_info();
+        let entry_lamports = refund_entry_info.lamports();
+        **refund_player.try_borrow_mut_lamports()? += entry_lamports;
+        **refund_entry_info.try_borrow_mut_lamports()? = 0;
+        let mut data = refund_entry_info.try_borrow_mut_data()?;
+        for byte in data.iter_mut() {
+            *byte = 0;
+        }
+        drop(data);
+        tournament.entries_remaining -= 1;
+
         msg!("Refunded last player {} to ensure even participant count", last_player);
     }
 
     // After odd-player refund, re-check if zero active players remain
-    let active_after_refund = tournament.participant_count - tournament.forfeits;
-    if active_after_refund == 0 {
+    if tournament.participant_count == 0 {
         tournament.state = TournamentState::Running;
         tournament.matches_total = 0;
         tournament.matches_completed = 0;
@@ -200,7 +211,7 @@ pub fn close_reveal(ctx: Context<CloseReveal>) -> Result<()> {
     tournament.randomness_seed = seed;
 
     // Apply adaptive K based on active participant count
-    let active = tournament.participant_count - tournament.forfeits;
+    let active = tournament.participant_count;
     let effective_k = match_logic::effective_k(active, tournament.matches_per_player);
     tournament.matches_per_player = effective_k;
     tournament.round_tier = if active <= 1000 { 0 } else { 1 };
@@ -360,8 +371,8 @@ pub fn run_matches<'info>(
     for batch_idx in 0..matches_to_run {
         let match_index = start_index + batch_idx;
         
-        // Get pairing for this match (use active count = participant_count - forfeits)
-        let active_count = tournament.participant_count - tournament.forfeits;
+        // Get pairing for this match
+        let active_count = tournament.participant_count;
         let pairing = match_logic::get_pairing_for_match(
             active_count,
             tournament.matches_per_player,
@@ -423,8 +434,10 @@ pub fn run_matches<'info>(
         );
 
         // Update scores (both entry and tournament)
-        entry_a_account.score += result.total_score_a;
-        entry_b_account.score += result.total_score_b;
+        entry_a_account.score = entry_a_account.score
+            .checked_add(result.total_score_a).ok_or(ArenaError::Overflow)?;
+        entry_b_account.score = entry_b_account.score
+            .checked_add(result.total_score_b).ok_or(ArenaError::Overflow)?;
         entry_a_account.matches_played += 1;
         entry_b_account.matches_played += 1;
 
@@ -436,8 +449,10 @@ pub fn run_matches<'info>(
         drop(entry_a_data);
         drop(entry_b_data);
 
-        tournament.scores[idx_a as usize] += result.total_score_a;
-        tournament.scores[idx_b as usize] += result.total_score_b;
+        tournament.scores[idx_a as usize] = tournament.scores[idx_a as usize]
+            .checked_add(result.total_score_a).ok_or(ArenaError::Overflow)?;
+        tournament.scores[idx_b as usize] = tournament.scores[idx_b as usize]
+            .checked_add(result.total_score_b).ok_or(ArenaError::Overflow)?;
 
         tournament.matches_completed += 1;
 
@@ -564,8 +579,7 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         )
         .ok_or(ArenaError::Overflow)?;
 
-    // Active participants = participant_count - forfeits
-    let active = tournament.participant_count - tournament.forfeits;
+    let active = tournament.participant_count;
 
     if active == 0 {
         // No active players — all forfeited. Reimburse operator first, sweep remainder.
@@ -588,7 +602,8 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         // Sweep remainder to accumulated fees
         let remaining = tournament.to_account_info().lamports().saturating_sub(min_balance);
         if remaining > 0 {
-            config.accumulated_fees += remaining;
+            config.accumulated_fees = config.accumulated_fees
+                .checked_add(remaining).ok_or(ArenaError::Overflow)?;
             **tournament.to_account_info().try_borrow_mut_lamports()? -= remaining;
             **config.to_account_info().try_borrow_mut_lamports()? += remaining;
         }
@@ -643,7 +658,8 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         let dust = winner_pool_raw - (per_winner * tournament.winner_count as u64);
 
         let fee_total = house_fee + dust;
-        config.accumulated_fees += fee_total;
+        config.accumulated_fees = config.accumulated_fees
+            .checked_add(fee_total).ok_or(ArenaError::Overflow)?;
 
         // Transfer fee lamports from tournament account to config account
         **tournament.to_account_info().try_borrow_mut_lamports()? -= fee_total;
@@ -689,7 +705,6 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
     next_tournament.round_tier = 0;
     next_tournament.reveal_ends = 0;          // NEW v1.7
     next_tournament.reveals_completed = 0;    // NEW v1.7
-    next_tournament.forfeits = 0;             // NEW v1.7
     next_tournament.players = Vec::new();
     next_tournament.scores = Vec::new();
     next_tournament.strategies = Vec::new();
@@ -776,7 +791,8 @@ pub fn close_entry(ctx: Context<CloseEntry>) -> Result<()> {
             let max_transfer = tournament.to_account_info().lamports().saturating_sub(min_balance);
             let transfer = share.min(max_transfer);
             if transfer > 0 {
-                config.accumulated_fees += transfer;
+                config.accumulated_fees = config.accumulated_fees
+                    .checked_add(transfer).ok_or(ArenaError::Overflow)?;
                 **tournament.to_account_info().try_borrow_mut_lamports()? -= transfer;
                 **config.to_account_info().try_borrow_mut_lamports()? += transfer;
             }

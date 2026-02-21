@@ -119,7 +119,6 @@ pub fn initialize_config(
     tournament.round_tier = 0;
     tournament.reveal_ends = 0;
     tournament.reveals_completed = 0;
-    tournament.forfeits = 0;
     tournament.players = Vec::new();
     tournament.scores = Vec::new();
     tournament.strategies = Vec::new();
@@ -234,11 +233,17 @@ pub struct WithdrawFees<'info> {
 
 pub fn withdraw_fees(ctx: Context<WithdrawFees>) -> Result<()> {
     let config = &mut ctx.accounts.config;
-    
+
     require!(config.accumulated_fees > 0, ArenaError::NoFeesToWithdraw);
 
-    let amount = config.accumulated_fees;
-    config.accumulated_fees = 0;
+    // Cap withdrawal to preserve rent-exempt minimum
+    let rent = Rent::get()?;
+    let min_balance = rent.minimum_balance(config.to_account_info().data_len());
+    let max_withdraw = config.to_account_info().lamports().saturating_sub(min_balance);
+    let amount = config.accumulated_fees.min(max_withdraw);
+
+    config.accumulated_fees = config.accumulated_fees
+        .checked_sub(amount).ok_or(ArenaError::Overflow)?;
 
     // Transfer from config account to admin
     **config.to_account_info().try_borrow_mut_lamports()? -= amount;

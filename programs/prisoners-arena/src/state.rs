@@ -138,8 +138,6 @@ pub struct Tournament {
     pub reveal_duration: i64,         // NEW v1.7
     /// Number of players who have revealed
     pub reveals_completed: u32,       // NEW v1.7
-    /// Number of players who forfeited (didn't reveal in time)
-    pub forfeits: u32,                // NEW v1.7
     /// Ordered list of player pubkeys (index = entry order, default = refunded)
     pub players: Vec<Pubkey>,
     /// Scores indexed by entry.index (source of truth for finalization)
@@ -180,7 +178,6 @@ impl Tournament {
         8 +   // reveal_ends (NEW v1.7)
         8 +   // reveal_duration (NEW v1.7)
         4 +   // reveals_completed (NEW v1.7)
-        4 +   // forfeits (NEW v1.7)
         4 +   // players vec len (empty)
         4 +   // scores vec len (empty)
         4 +   // strategies vec len (empty)
