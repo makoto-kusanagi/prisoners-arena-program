@@ -4,13 +4,13 @@ skip-lint = false
 testing = ["prisoners_arena/testing"]
 
 [programs.localnet]
-prisoners_arena = "7gJU56iACgPLsinhLCc2cSZs7ZuwSs1fHgFeDNdnZxSX"
+prisoners_arena = "2j8FBKuXsBsHRjfVLWCdPtZbPDLKzM3jXG7JSAy4jtga"
 
 [programs.devnet]
-prisoners_arena = "7gJU56iACgPLsinhLCc2cSZs7ZuwSs1fHgFeDNdnZxSX"
+prisoners_arena = "2j8FBKuXsBsHRjfVLWCdPtZbPDLKzM3jXG7JSAy4jtga"
 
 [programs.mainnet]
-prisoners_arena = "7gJU56iACgPLsinhLCc2cSZs7ZuwSs1fHgFeDNdnZxSX"
+prisoners_arena = "2j8FBKuXsBsHRjfVLWCdPtZbPDLKzM3jXG7JSAy4jtga"
 
 [registry]
 url = "https://api.apr.dev"
