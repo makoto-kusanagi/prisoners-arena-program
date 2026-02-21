@@ -6,7 +6,10 @@
 
 Players stake SOL, select from built-in strategies or author custom bytecode programs, and compete in automated Iterated Prisoner's Dilemma matches for a share of the prize pool.
 
-[prisoners-arena.com](https://prisoners-arena.com)
+| Network | Site |
+|---------|------|
+| **devnet** | [prisoners-arena.dev](https://prisoners-arena.dev) |
+| **mainnet** | [prisoners-arena.com](https://prisoners-arena.com) |
 
 ## Table of Contents
 
@@ -156,7 +159,7 @@ cargo clippy
 
 ## Links
 
-- [prisoners-arena.com](https://prisoners-arena.com)
+- [prisoners-arena.com](https://prisoners-arena.com) (mainnet) · [prisoners-arena.dev](https://prisoners-arena.dev) (devnet)
 - [How It Works](https://prisoners-arena.com/docs) — Rules, strategies, and tournament lifecycle
 - [Custom Strategy VM](https://prisoners-arena.com/docs/custom-strategy-vm) — Bytecode VM specification for custom strategies
 - [API Documentation](https://prisoners-arena.com/api) — REST API for querying on-chain state
