@@ -255,6 +255,10 @@ pub struct ForfeitUnrevealed<'info> {
     #[account(mut)]
     pub tournament: Account<'info, Tournament>,
 
+    /// CHECK: SlotHashes sysvar for unpredictable forfeit strategy assignment
+    #[account(address = anchor_lang::solana_program::sysvar::slot_hashes::ID)]
+    pub slot_hashes: AccountInfo<'info>,
+
     #[account(mut)]
     pub operator: Signer<'info>,
 }
@@ -282,8 +286,12 @@ pub fn forfeit_unrevealed(ctx: Context<ForfeitUnrevealed>) -> Result<()> {
 
     require!(!entry.revealed, ArenaError::AlreadyRevealed);
 
-    // Derive a deterministic strategy from the commitment hash
-    let strategy_index = entry.commitment[0] % 9;
+    // Derive a strategy from the current slot hash — unpredictable at
+    // registration time so players cannot brute-force salts to control
+    // which strategy they'd receive if they forfeit.
+    let slot_hashes_data = ctx.accounts.slot_hashes.try_borrow_data()?;
+    require!(slot_hashes_data.len() >= 48, ArenaError::SlotHashUnavailable);
+    let strategy_index = slot_hashes_data[16 + (entry.index as usize % 32)] % 9;
     let strategy = crate::state::Strategy::from_index(strategy_index)
         .ok_or(ArenaError::InvalidState)?;
 
@@ -339,7 +347,16 @@ pub fn run_matches<'info>(
         ArenaError::InvalidState
     );
 
-    // Track operator costs for reimbursement
+    // Process up to MATCHES_PER_TX matches
+    let matches_to_run = MATCHES_PER_TX.min(tournament.matches_total - tournament.matches_completed);
+
+    if matches_to_run == 0 {
+        msg!("No matches remaining");
+        return Ok(());
+    }
+
+    // Track operator costs for reimbursement (after zero-match guard to prevent
+    // no-op calls from inflating reimbursement)
     tournament.operator_costs = tournament.operator_costs
         .checked_add(config.operator_tx_fee)
         .ok_or(ArenaError::Overflow)?;
@@ -352,14 +369,6 @@ pub fn run_matches<'info>(
                 ArenaError::UnrevealedStrategy
             );
         }
-    }
-
-    // Process up to MATCHES_PER_TX matches
-    let matches_to_run = MATCHES_PER_TX.min(tournament.matches_total - tournament.matches_completed);
-    
-    if matches_to_run == 0 {
-        msg!("No matches remaining");
-        return Ok(());
     }
 
     // Snapshot starting index before the loop mutates matches_completed
@@ -657,7 +666,7 @@ pub fn finalize_tournament(ctx: Context<FinalizeTournament>) -> Result<()> {
         let per_winner = winner_pool_raw / tournament.winner_count as u64;
         let dust = winner_pool_raw - (per_winner * tournament.winner_count as u64);
 
-        let fee_total = house_fee + dust;
+        let fee_total = house_fee.checked_add(dust).ok_or(ArenaError::Overflow)?;
         config.accumulated_fees = config.accumulated_fees
             .checked_add(fee_total).ok_or(ArenaError::Overflow)?;
 

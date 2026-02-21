@@ -210,7 +210,7 @@ pub fn reveal_strategy(
     Ok(())
 }
 
-/// Claim refund during Registration or Reveal (allowed anytime before Running)
+/// Claim refund during Registration (before operator closes registration)
 #[derive(Accounts)]
 pub struct ClaimRefund<'info> {
     #[account(
@@ -241,10 +241,11 @@ pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
     let entry = &ctx.accounts.entry;
     let player = &ctx.accounts.player;
 
-    // Refund allowed during Registration or Reveal phase
+    // Refund only allowed during Registration — once close_registration passes
+    // (validating min_participants), participant_count is locked to prevent
+    // degrading tournaments below the minimum threshold.
     require!(
-        tournament.state == TournamentState::Registration
-            || tournament.state == TournamentState::Reveal,
+        tournament.state == TournamentState::Registration,
         ArenaError::InvalidState
     );
 
@@ -258,14 +259,12 @@ pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
     // Mark player slot as refunded (set to default pubkey)
     tournament.players[entry.index as usize] = Pubkey::default();
     tournament.strategies[entry.index as usize] = u8::MAX; // 255 = refunded/invalid
-    tournament.participant_count -= 1;
-    tournament.entries_remaining -= 1;
-    tournament.pool -= refund_amount;
-
-    // If player had already revealed, decrement reveals_completed
-    if entry.revealed {
-        tournament.reveals_completed -= 1;
-    }
+    tournament.participant_count = tournament.participant_count
+        .checked_sub(1).ok_or(ArenaError::Overflow)?;
+    tournament.entries_remaining = tournament.entries_remaining
+        .checked_sub(1).ok_or(ArenaError::Overflow)?;
+    tournament.pool = tournament.pool
+        .checked_sub(refund_amount).ok_or(ArenaError::Overflow)?;
 
     msg!(
         "Refunded {} lamports to player {} from tournament {}",

@@ -76,7 +76,14 @@ pub fn initialize_config(
         min_participants >= 2 && min_participants % 2 == 0,
         ArenaError::InvalidMinParticipants
     );
-    
+
+    // Same validations as update_config — prevents misconfigured initialization
+    require!(stake > 0, ArenaError::Overflow);
+    require!(max_participants >= min_participants, ArenaError::Overflow);
+    require!(registration_duration > 0, ArenaError::Overflow);
+    require!(matches_per_player > 0, ArenaError::Overflow);
+    require!(reveal_duration > 0, ArenaError::Overflow);
+
     let config = &mut ctx.accounts.config;
     
     config.admin = ctx.accounts.admin.key();
@@ -207,6 +214,8 @@ pub fn update_config(
     }
 
     if let Some(fee) = operator_tx_fee {
+        // Cap at 0.1 SOL (100_000_000 lamports) to prevent prize pool drain
+        require!(fee <= 100_000_000, ArenaError::Overflow);
         config.operator_tx_fee = fee;
     }
 

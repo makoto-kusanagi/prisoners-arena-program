@@ -171,7 +171,7 @@ fn feistel_permute(idx: u32, domain_size: u32, round_keys: &[u64; 6]) -> u32 {
     let half = isqrt_ceil(domain_size);
 
     let mut val = idx;
-    loop {
+    for _ in 0..1000 {
         let mut left = val / half;
         let mut right = val % half;
 
@@ -189,6 +189,7 @@ fn feistel_permute(idx: u32, domain_size: u32, round_keys: &[u64; 6]) -> u32 {
         }
         // cycle-walk: re-enter with the out-of-range value
     }
+    panic!("feistel_permute: cycle-walking exceeded 1000 iterations for domain_size={domain_size}, idx={idx}");
 }
 
 /// Floyd's algorithm: sample `offsets_to_use` distinct offsets from [1, available].

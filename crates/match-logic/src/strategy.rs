@@ -132,8 +132,8 @@ fn execute_pavlov(
         return Move::Cooperate; // Start with cooperate
     }
     
-    let my_last = my_history.last().unwrap();
-    let opp_last = opponent_history.last().unwrap();
+    let my_last = my_history.last().unwrap_or(&Move::Cooperate);
+    let opp_last = opponent_history.last().unwrap_or(&Move::Cooperate);
     
     // Calculate what we scored last round
     let (my_score, _) = crate::payoff(*my_last, *opp_last);
