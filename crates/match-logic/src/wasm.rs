@@ -163,9 +163,33 @@ pub fn get_tournament_pairings(
 ) -> Result<JsValue, JsError> {
     let seed_arr: [u8; 32] = seed.try_into()
         .map_err(|_| JsError::new("Seed must be exactly 32 bytes"))?;
-    
+
     let pairings = generate_all_pairings(participant_count, opponents_per_agent, &seed_arr);
-    
+
+    serde_wasm_bindgen::to_value(&pairings)
+        .map_err(|e| JsError::new(&format!("Serialization error: {}", e)))
+}
+
+/// Like `get_tournament_pairings`, but filters out pairings involving
+/// refunded player slots (strategy index == u8::MAX).
+#[wasm_bindgen]
+pub fn get_tournament_pairings_filtered(
+    participant_count: u32,
+    opponents_per_agent: u16,
+    seed: &[u8],
+    strategies: &[u8],
+) -> Result<JsValue, JsError> {
+    let seed_arr: [u8; 32] = seed.try_into()
+        .map_err(|_| JsError::new("Seed must be exactly 32 bytes"))?;
+
+    let pairings: Vec<(u32, u32)> = generate_all_pairings(participant_count, opponents_per_agent, &seed_arr)
+        .into_iter()
+        .filter(|(a, b)| {
+            strategies.get(*a as usize).map_or(false, |s| *s != u8::MAX)
+                && strategies.get(*b as usize).map_or(false, |s| *s != u8::MAX)
+        })
+        .collect();
+
     serde_wasm_bindgen::to_value(&pairings)
         .map_err(|e| JsError::new(&format!("Serialization error: {}", e)))
 }
