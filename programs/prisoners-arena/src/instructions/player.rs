@@ -341,7 +341,8 @@ pub fn claim_payout(ctx: Context<ClaimPayout>) -> Result<()> {
     // Mark as paid
     entry.paid_out = true;
     tournament.claims_processed += 1;
-    tournament.entries_remaining -= 1;
+    tournament.entries_remaining = tournament.entries_remaining
+        .checked_sub(1).ok_or(ArenaError::Overflow)?;
 
     msg!(
         "Paid {} lamports to player {} from tournament {}",

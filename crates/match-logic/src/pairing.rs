@@ -55,17 +55,17 @@ pub fn generate_all_pairings(
 
     if n <= k + 1 {
         (0..total)
-            .map(|i| {
-                let canonical = feistel_permute(i, total, &round_keys);
-                canonical_to_pair_round_robin(canonical, n)
+            .filter_map(|i| {
+                let canonical = feistel_permute(i, total, &round_keys)?;
+                Some(canonical_to_pair_round_robin(canonical, n))
             })
             .collect()
     } else {
         let (offsets, count) = select_offsets(n, k, seed);
         (0..total)
-            .map(|i| {
-                let canonical = feistel_permute(i, total, &round_keys);
-                canonical_to_pair_circular(canonical, n, &offsets[..count])
+            .filter_map(|i| {
+                let canonical = feistel_permute(i, total, &round_keys)?;
+                Some(canonical_to_pair_circular(canonical, n, &offsets[..count]))
             })
             .collect()
     }
@@ -87,7 +87,7 @@ pub fn get_pairing_for_match(
     }
 
     let round_keys = derive_feistel_keys(seed);
-    let canonical_idx = feistel_permute(match_index, total, &round_keys);
+    let canonical_idx = feistel_permute(match_index, total, &round_keys)?;
 
     if n <= k + 1 {
         Some(canonical_to_pair_round_robin(canonical_idx, n))
@@ -164,9 +164,9 @@ fn derive_feistel_keys(seed: &[u8; 32]) -> [u64; 6] {
 }
 
 /// Bijective permutation on [0, domain_size) via a Feistel network with cycle-walking.
-fn feistel_permute(idx: u32, domain_size: u32, round_keys: &[u64; 6]) -> u32 {
+fn feistel_permute(idx: u32, domain_size: u32, round_keys: &[u64; 6]) -> Option<u32> {
     if domain_size <= 1 {
-        return 0;
+        return Some(0);
     }
     let half = isqrt_ceil(domain_size);
 
@@ -185,11 +185,11 @@ fn feistel_permute(idx: u32, domain_size: u32, round_keys: &[u64; 6]) -> u32 {
 
         val = left * half + right;
         if val < domain_size {
-            return val;
+            return Some(val);
         }
         // cycle-walk: re-enter with the out-of-range value
     }
-    panic!("feistel_permute: cycle-walking exceeded 1000 iterations for domain_size={domain_size}, idx={idx}");
+    None
 }
 
 /// Floyd's algorithm: sample `offsets_to_use` distinct offsets from [1, available].
@@ -598,7 +598,7 @@ mod tests {
         for domain in [1, 2, 3, 5, 10, 50, 100, 250, 1000] {
             let mut seen = vec![false; domain];
             for i in 0..domain as u32 {
-                let out = feistel_permute(i, domain as u32, &keys);
+                let out = feistel_permute(i, domain as u32, &keys).unwrap();
                 assert!(out < domain as u32, "out of range: {} >= {}", out, domain);
                 assert!(
                     !seen[out as usize],
@@ -617,10 +617,10 @@ mod tests {
         let domain = 100u32;
 
         let perm1: Vec<u32> = (0..domain)
-            .map(|i| feistel_permute(i, domain, &keys1))
+            .map(|i| feistel_permute(i, domain, &keys1).unwrap())
             .collect();
         let perm2: Vec<u32> = (0..domain)
-            .map(|i| feistel_permute(i, domain, &keys2))
+            .map(|i| feistel_permute(i, domain, &keys2).unwrap())
             .collect();
 
         assert_ne!(perm1, perm2);

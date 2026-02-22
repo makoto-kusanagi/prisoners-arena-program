@@ -47,14 +47,31 @@ For full rules, available strategies, and tournament lifecycle details, see [How
 
 Anyone can verify that the deployed program matches this source code using [solana-verify](https://github.com/Ellipsis-Labs/solana-verifiable-build).
 
+> **Note:** This project uses Solana SDK v3 which split the `solana-program` crate into subcrates. Two workarounds are needed until upstream catches up:
+>
+> 1. **Install patched `solana-verify`** — the released version (v0.4.11) cannot parse the Cargo.lock. Until [PR #228](https://github.com/Ellipsis-Labs/solana-verifiable-build/pull/228) is merged:
+>    ```bash
+>    cargo install solana-verify \
+>        --git https://github.com/MidTermDev/solana-verifiable-build.git \
+>        --branch fix/sdk-v3-cargo-lock-compat
+>    ```
+> 2. **Specify the Docker image** — the auto-detected image ships Rust 1.84 which lacks edition 2024 support. Use `--base-image` to select a newer image:
+>    ```bash
+>    --base-image solanafoundation/solana-verifiable-build:3.0.1
+>    ```
+
 The program ID can be found via the [config API](https://prisoners-arena.com/api/config) in the `data.programId` field.
 
 ```bash
 solana-verify verify-from-repo \
     https://github.com/makoto-kusanagi/prisoners-arena-program \
     --program-id <PROGRAM_ID> \
-    --library-name prisoners_arena
+    --library-name prisoners_arena \
+    --base-image solanafoundation/solana-verifiable-build:3.0.1 \
+    -u <RPC_URL>
 ```
+
+Use `-u https://api.devnet.solana.com` for devnet or `-u https://api.mainnet-beta.solana.com` for mainnet.
 
 ## Architecture
 

@@ -821,7 +821,8 @@ pub fn close_entry(ctx: Context<CloseEntry>) -> Result<()> {
     }
 
     // Entry closed via `close = player` — rent returned to player
-    tournament.entries_remaining -= 1;
+    tournament.entries_remaining = tournament.entries_remaining
+        .checked_sub(1).ok_or(ArenaError::Overflow)?;
 
     msg!("Closed entry for player {}", entry.player);
 
